@@ -152,6 +152,27 @@ var _ = Describe("Provider", func() {
 			Expect(inf).To(Equal(expectedInf))
 		})
 
+		It("returns azure infrastructure", func() {
+			resolver := NewRegistryEndpointResolver(
+				NewDigDNSResolver(runner, logger),
+			)
+
+			metadataService := NewAzureMetadataServiceProvider(resolver, platform, "/var/lib/waagent/CustomData", "/var/lib/waagent/GoalState.1.xml", "/var/lib/waagent/ovf-env.xml", logger).Get()
+			registry := NewAzureRegistry(metadataService)
+
+			expectedInf := NewAzureInfrastructure(
+				metadataService,
+				registry,
+				platform,
+				expectedVirtioPathResolver,
+				logger,
+			)
+
+			inf, err := provider.Get("azure")
+			Expect(err).ToNot(HaveOccurred())
+			Expect(inf).To(Equal(expectedInf))
+		})
+
 		It("returns an error on unknown infrastructure", func() {
 			_, err := provider.Get("some unknown infrastructure name")
 			Expect(err).To(HaveOccurred())

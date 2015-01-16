@@ -58,6 +58,17 @@ func NewProvider(logger boshlog.Logger, platform boshplatform.Platform, options 
 		logger,
 	)
 
+	azureMetadataService := NewAzureMetadataServiceProvider(resolver, platform, "/var/lib/waagent/CustomData", "/var/lib/waagent/GoalState.1.xml", "/var/lib/waagent/ovf-env.xml", logger).Get()
+	azureRegistry := NewAzureRegistry(azureMetadataService)
+
+	azureInfrastructure := NewAzureInfrastructure(
+		azureMetadataService,
+		azureRegistry,
+		platform,
+		virtioDevicePathResolver,
+		logger,
+	)
+
 	wardenMetadataFilePath := filepath.Join(dirProvider.BoshDir(), "warden-cpi-metadata.json")
 	wardenUserDataFilePath := filepath.Join(dirProvider.BoshDir(), "warden-cpi-user-data.json")
 	wardenFallbackFileRegistryPath := filepath.Join(dirProvider.BoshDir(), "warden-cpi-agent-env.json")
@@ -67,6 +78,7 @@ func NewProvider(logger boshlog.Logger, platform boshplatform.Platform, options 
 	p.infrastructures = map[string]Infrastructure{
 		"aws":       awsInfrastructure,
 		"openstack": openstackInfrastructure,
+		"azure":     azureInfrastructure,
 		"dummy":     NewDummyInfrastructure(fs, dirProvider, platform, dummyDevicePathResolver),
 		"warden":    NewWardenInfrastructure(platform, dummyDevicePathResolver, wardenRegistryProvider),
 		"vsphere":   NewVsphereInfrastructure(platform, scsiDevicePathResolver, logger),
