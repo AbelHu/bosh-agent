@@ -12,9 +12,7 @@ import (
 type azureFileMetadataService struct {
 	resolver          DNSResolver
 	fs                boshsys.FileSystem
-	userDataFilePath  string
-	goalstateFilePath string
-	ovfenvFilePath    string
+	walaLibPath       string
 	logger            boshlog.Logger
 	logTag            string
 }
@@ -22,19 +20,15 @@ type azureFileMetadataService struct {
 func NewAzureFileMetadataService(
 	resolver DNSResolver,
 	fs boshsys.FileSystem,
-	userDataFilePath string,
-	goalstateFilePath string,
-	ovfenvFilePath string,
+	walaLibPath string,
 	logger boshlog.Logger,
 ) azureFileMetadataService {
 	return azureFileMetadataService{
-		resolver:          resolver,
-		fs:                fs,
-		userDataFilePath:  userDataFilePath,
-		goalstateFilePath: goalstateFilePath,
-		ovfenvFilePath:    ovfenvFilePath,
-		logger:            logger,
-		logTag:            "azureFileMetadataService",
+		resolver:     resolver,
+		fs:           fs,
+		walaLibPath:  walaLibPath,
+		logger:       logger,
+		logTag:       "azureFileMetadataService",
 	}
 }
 
@@ -43,9 +37,9 @@ func (ms azureFileMetadataService) Load() error {
 }
 
 func (ms azureFileMetadataService) GetPublicKey() (string, error) {
-	contents, err := ms.fs.ReadFileString(ms.ovfenvFilePath)
+	contents, err := ms.fs.ReadFileString(ms.walaLibPath + "/ovf-env.xml")
 	if err != nil {
-		return "", bosherr.WrapError(err, "Reading ovf-env file")
+		return "", bosherr.WrapError(err, "Reading ovf-env.xml")
 	}
 
 	re := regexp.MustCompile("<UserName>(.*)</UserName>")
@@ -62,20 +56,30 @@ func (ms azureFileMetadataService) GetPublicKey() (string, error) {
 }
 
 func (ms azureFileMetadataService) GetInstanceID() (string, error) {
-	contents, err := ms.fs.ReadFileString(ms.goalstateFilePath)
+	contents, err := ms.fs.ReadFileString(ms.walaLibPath + "/SharedConfig.xml")
 	if err != nil {
-		return "", bosherr.WrapError(err, "Reading GoalState file")
+		return "", bosherr.WrapError(err, "Reading SharedConfig.xml")
 	}
 
-	re := regexp.MustCompile("^*<InstanceId>(.*)</InstanceId>")
+	re := regexp.MustCompile("^*<Service name=\"(.*)\" guid=\"{[-0-9a-fA-F]+}\"[\\s]*/>")
 	match := re.FindStringSubmatch(contents)
 	if match == nil {
-		return "", bosherr.WrapError(err, "Reading GoalState file")
+		return "", bosherr.WrapError(err, "Find service name in SharedConfig.xml")
 	}
 
-	ms.logger.Debug(ms.logTag, "Read instanceID %#v", match[1])
+	service_name := match[1]
+	ms.logger.Debug(ms.logTag, "Read service name %#v", service_name)
 
-	return match[1], nil
+	re = regexp.MustCompile("^*<Incarnation number=\"\\d*\" instance=\"(.*)\" guid=\"{[-0-9a-fA-F]+}\"[\\s]*/>")
+	match = re.FindStringSubmatch(contents)
+	if match == nil {
+		return "", bosherr.WrapError(err, "Find instance name in SharedConfig.xml")
+	}
+
+	vm_name := match[1]
+	ms.logger.Debug(ms.logTag, "Read instance name %#v", vm_name)
+
+	return service_name + "/" + vm_name, nil
 }
 
 func (ms azureFileMetadataService) GetServerName() (string, error) {
@@ -115,7 +119,7 @@ func (ms azureFileMetadataService) GetRegistryEndpoint() (string, error) {
 func (ms azureFileMetadataService) getUserData() (UserDataContentsType, error) {
 	var userData UserDataContentsType
 	
-	contents, err := ms.fs.ReadFile(ms.userDataFilePath)
+	contents, err := ms.fs.ReadFile(ms.walaLibPath + "/CustomData")
 	if err != nil {
 		return userData, bosherr.WrapError(err, "Reading user data file")
 	}

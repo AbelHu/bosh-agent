@@ -58,7 +58,7 @@ func NewProvider(logger boshlog.Logger, platform boshplatform.Platform, options 
 		logger,
 	)
 
-	azureMetadataService := NewAzureMetadataServiceProvider(resolver, platform, "/var/lib/waagent/CustomData", "/var/lib/waagent/GoalState.1.xml", "/var/lib/waagent/ovf-env.xml", logger).Get()
+	azureMetadataService := NewAzureMetadataServiceProvider(resolver, platform, "/var/lib/waagent", logger).Get()
 	azureRegistry := NewAzureRegistry(azureMetadataService)
 
 	azureInfrastructure := NewAzureInfrastructure(

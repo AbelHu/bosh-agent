@@ -26,9 +26,7 @@ var _ = Describe("AzureMetadataServiceProvider", func() {
 		azureMetadataServiceProvider = NewAzureMetadataServiceProvider(
 			fakeresolver,
 			platform,
-			"/var/lib/waagent/CustomData",
-			"/var/lib/waagent/GoalState.1.xml",
-			"/var/lib/waagent/ovf-env.xml",
+			"/var/lib/waagent",
 			logger,
 		)
 	})
@@ -38,9 +36,7 @@ var _ = Describe("AzureMetadataServiceProvider", func() {
 			expectedMetadataService := NewAzureFileMetadataService(
 				fakeresolver,
 				platform.GetFs(),
-				"/var/lib/waagent/CustomData",
-				"/var/lib/waagent/GoalState.1.xml",
-				"/var/lib/waagent/ovf-env.xml",
+				"/var/lib/waagent",
 				logger,
 			)
 			Expect(azureMetadataServiceProvider.Get()).To(Equal(expectedMetadataService))

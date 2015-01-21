@@ -157,7 +157,7 @@ var _ = Describe("Provider", func() {
 				NewDigDNSResolver(runner, logger),
 			)
 
-			metadataService := NewAzureMetadataServiceProvider(resolver, platform, "/var/lib/waagent/CustomData", "/var/lib/waagent/GoalState.1.xml", "/var/lib/waagent/ovf-env.xml", logger).Get()
+			metadataService := NewAzureMetadataServiceProvider(resolver, platform, "/var/lib/waagent", logger).Get()
 			registry := NewAzureRegistry(metadataService)
 
 			expectedInf := NewAzureInfrastructure(

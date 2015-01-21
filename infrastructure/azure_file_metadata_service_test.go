@@ -19,33 +19,46 @@ var _ = Describe("AzureFileMetadataService", func() {
 		fs              *fakesys.FakeFileSystem
 		dnsResolver     *fakeinf.FakeDNSResolver
 		metadataService MetadataService
+		fakeWalaLibPath string
 	)
 
 	BeforeEach(func() {
 		fs = fakesys.NewFakeFileSystem()
 		logger := boshlog.NewLogger(boshlog.LevelNone)
 		dnsResolver = &fakeinf.FakeDNSResolver{}
-		metadataService = NewAzureFileMetadataService(dnsResolver, fs, "fake-userdata-file-path", "fake-goalstate-file-path", "fake-ovfenv-file-path", logger)
+		fakeWalaLibPath = "fake-wala-lib-path"
+		metadataService = NewAzureFileMetadataService(dnsResolver, fs, fakeWalaLibPath, logger)
 	})
 
 	Describe("GetPublicKey", func() {
-		Context("when userdata file exists", func() {
+		Context("when ovf-env.xml exists", func() {
 			BeforeEach(func() {
-				userDataContents := `testdata<UserName>fake-user</UserName>testdata`
-				fs.WriteFileString("fake-ovfenv-file-path", userDataContents)
-				
-				publicKey := "fake-openssh-key"
-				fs.WriteFileString("/home/fake-user/.ssh/authorized_keys", publicKey)
+				content := `testdata<UserName>fake-user</UserName>testdata`
+				fs.WriteFileString(fakeWalaLibPath + "/ovf-env.xml", content)
 			})
 
-			It("returns public key", func() {
-				instanceID, err := metadataService.GetPublicKey()
-				Expect(err).NotTo(HaveOccurred())
-				Expect(instanceID).To(Equal("fake-openssh-key"))
+			Context("when authorized_keys exists", func() {
+				BeforeEach(func() {
+					publicKey := "fake-openssh-key"
+					fs.WriteFileString("/home/fake-user/.ssh/authorized_keys", publicKey)
+				})
+
+				It("returns public key", func() {
+					instanceID, err := metadataService.GetPublicKey()
+					Expect(err).NotTo(HaveOccurred())
+					Expect(instanceID).To(Equal("fake-openssh-key"))
+				})
+			})
+
+			Context("when authorized_keys does not exist", func() {
+				It("returns an error", func() {
+					_, err := metadataService.GetPublicKey()
+					Expect(err).To(HaveOccurred())
+				})
 			})
 		})
 
-		Context("when userdata file does not exist", func() {
+		Context("when ovf-env.xml does not exist", func() {
 			It("returns an error", func() {
 				_, err := metadataService.GetPublicKey()
 				Expect(err).To(HaveOccurred())
@@ -54,20 +67,22 @@ var _ = Describe("AzureFileMetadataService", func() {
 	})
 
 	Describe("GetInstanceID", func() {
-		Context("when goalstate file exists", func() {
+		Context("when SharedConfig.xml exists", func() {
 			BeforeEach(func() {
-				goalstateContents := `     <InstanceId>fake-instance-id</InstanceId>`
-				fs.WriteFileString("fake-goalstate-file-path", goalstateContents)
+				content := `    <Service name="fake-service-id" guid="{00000000-0000-0000-0000-000000000000}" />`
+				content += "\n"
+				content += `<Incarnation number="1" instance="fake-instance-id" guid="{ed0306ca-f13b-47c3-8d5a-fa347b54ca35}" />`
+				fs.WriteFileString(fakeWalaLibPath + "/SharedConfig.xml", content)
 			})
 
 			It("returns instance id", func() {
 				instanceID, err := metadataService.GetInstanceID()
 				Expect(err).NotTo(HaveOccurred())
-				Expect(instanceID).To(Equal("fake-instance-id"))
+				Expect(instanceID).To(Equal("fake-service-id/fake-instance-id"))
 			})
 		})
 
-		Context("when goalstate file does not exist", func() {
+		Context("when SharedConfig.xml does not exist", func() {
 			It("returns an error", func() {
 				_, err := metadataService.GetInstanceID()
 				Expect(err).To(HaveOccurred())
@@ -79,7 +94,7 @@ var _ = Describe("AzureFileMetadataService", func() {
 		Context("when the server name is present in the JSON", func() {
 			BeforeEach(func() {
 				userDataContents := []byte(`{"server":{"name":"fake-server-name"}}`)
-				fs.WriteFileString("fake-userdata-file-path", base64.StdEncoding.EncodeToString(userDataContents))
+				fs.WriteFileString(fakeWalaLibPath + "/CustomData", base64.StdEncoding.EncodeToString(userDataContents))
 			})
 
 			It("returns the server name", func() {
@@ -105,7 +120,7 @@ var _ = Describe("AzureFileMetadataService", func() {
 					"registry":{"endpoint":"http://fake-registry.com"},
 					"dns":{"nameserver":["fake-dns-server-ip"]}
 				}`)
-				fs.WriteFileString("fake-userdata-file-path", base64.StdEncoding.EncodeToString(userDataContents))
+				fs.WriteFileString(fakeWalaLibPath + "/CustomData", base64.StdEncoding.EncodeToString(userDataContents))
 			})
 
 			Context("when registry endpoint is successfully resolved", func() {
@@ -142,7 +157,7 @@ var _ = Describe("AzureFileMetadataService", func() {
 			Context("when userdata file exists", func() {
 				BeforeEach(func() {
 					userDataContents := []byte(`{"registry":{"endpoint":"http://fake-registry.com"}}`)
-					fs.WriteFileString("fake-userdata-file-path", base64.StdEncoding.EncodeToString(userDataContents))
+					fs.WriteFileString(fakeWalaLibPath + "/CustomData", base64.StdEncoding.EncodeToString(userDataContents))
 				})
 
 				It("returns registry endpoint", func() {
