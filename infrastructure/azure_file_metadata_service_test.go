@@ -78,7 +78,7 @@ var _ = Describe("AzureFileMetadataService", func() {
 			It("returns instance id", func() {
 				instanceID, err := metadataService.GetInstanceID()
 				Expect(err).NotTo(HaveOccurred())
-				Expect(instanceID).To(Equal("fake-service-id/fake-instance-id"))
+				Expect(instanceID).To(Equal("fake-service-id&fake-instance-id"))
 			})
 		})
 

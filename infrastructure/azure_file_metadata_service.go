@@ -79,7 +79,7 @@ func (ms azureFileMetadataService) GetInstanceID() (string, error) {
 	vm_name := match[1]
 	ms.logger.Debug(ms.logTag, "Read instance name %#v", vm_name)
 
-	return service_name + "/" + vm_name, nil
+	return service_name + "&" + vm_name, nil
 }
 
 func (ms azureFileMetadataService) GetServerName() (string, error) {
