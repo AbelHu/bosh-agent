@@ -67,25 +67,24 @@ var _ = Describe("AzureFileMetadataService", func() {
 	})
 
 	Describe("GetInstanceID", func() {
-		Context("when SharedConfig.xml exists", func() {
+		Context("when the server name is present in the JSON", func() {
 			BeforeEach(func() {
-				content := `    <Service name="fake-service-id" guid="{00000000-0000-0000-0000-000000000000}" />`
-				content += "\n"
-				content += `<Incarnation number="1" instance="fake-instance-id" guid="{ed0306ca-f13b-47c3-8d5a-fa347b54ca35}" />`
-				fs.WriteFileString(fakeWalaLibPath + "/SharedConfig.xml", content)
+				userDataContents := []byte(`{"server":{"name":"fake-server-name"}}`)
+				fs.WriteFileString(fakeWalaLibPath + "/CustomData", base64.StdEncoding.EncodeToString(userDataContents))
 			})
 
 			It("returns instance id", func() {
 				instanceID, err := metadataService.GetInstanceID()
 				Expect(err).NotTo(HaveOccurred())
-				Expect(instanceID).To(Equal("fake-service-id&fake-instance-id"))
+				Expect(instanceID).To(Equal("fake-server-name"))
 			})
 		})
 
-		Context("when SharedConfig.xml does not exist", func() {
+		Context("when the server name is not present in the JSON", func() {
 			It("returns an error", func() {
-				_, err := metadataService.GetInstanceID()
+				instanceID, err := metadataService.GetInstanceID()
 				Expect(err).To(HaveOccurred())
+				Expect(instanceID).To(BeEmpty())
 			})
 		})
 	})
@@ -99,7 +98,7 @@ var _ = Describe("AzureFileMetadataService", func() {
 
 			It("returns the server name", func() {
 				name, err := metadataService.GetServerName()
-				Expect(err).ToNot(HaveOccurred())
+				Expect(err).NotTo(HaveOccurred())
 				Expect(name).To(Equal("fake-server-name"))
 			})
 		})
@@ -134,7 +133,7 @@ var _ = Describe("AzureFileMetadataService", func() {
 
 				It("returns the successfully resolved registry endpoint", func() {
 					endpoint, err := metadataService.GetRegistryEndpoint()
-					Expect(err).ToNot(HaveOccurred())
+					Expect(err).NotTo(HaveOccurred())
 					Expect(endpoint).To(Equal("http://fake-registry-ip"))
 				})
 			})

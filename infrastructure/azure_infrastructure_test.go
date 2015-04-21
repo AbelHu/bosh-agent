@@ -34,8 +34,8 @@ func init() {
 		})
 
 		Describe("NewAzureRegistry", func() {
-			It("returns concrete registry with useServerNameAsID set to false", func() {
-				expectedRegistry := NewHTTPRegistry(metadataService, false)
+			It("returns concrete registry with useServerNameAsID set to true", func() {
+				expectedRegistry := NewHTTPRegistry(metadataService, true)
 				Expect(NewAzureRegistry(metadataService)).To(Equal(expectedRegistry))
 			})
 		})
@@ -76,7 +76,7 @@ func init() {
 				registry.Settings = settings
 
 				settings, err := azure.GetSettings()
-				Expect(err).ToNot(HaveOccurred())
+				Expect(err).NotTo(HaveOccurred())
 
 				Expect(settings).To(Equal(settings))
 			})
@@ -97,7 +97,7 @@ func init() {
 				networks := boshsettings.Networks{"bosh": boshsettings.Network{}}
 
 				err := azure.SetupNetworking(networks)
-				Expect(err).ToNot(HaveOccurred())
+				Expect(err).NotTo(HaveOccurred())
 
 				Expect(platform.SetupDhcpNetworks).To(Equal(networks))
 			})

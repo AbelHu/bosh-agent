@@ -56,30 +56,7 @@ func (ms azureFileMetadataService) GetPublicKey() (string, error) {
 }
 
 func (ms azureFileMetadataService) GetInstanceID() (string, error) {
-	contents, err := ms.fs.ReadFileString(ms.walaLibPath + "/SharedConfig.xml")
-	if err != nil {
-		return "", bosherr.WrapError(err, "Reading SharedConfig.xml")
-	}
-
-	re := regexp.MustCompile("^*<Service name=\"(.*)\" guid=\"{[-0-9a-fA-F]+}\"[\\s]*/>")
-	match := re.FindStringSubmatch(contents)
-	if match == nil {
-		return "", bosherr.WrapError(err, "Find service name in SharedConfig.xml")
-	}
-
-	service_name := match[1]
-	ms.logger.Debug(ms.logTag, "Read service name %#v", service_name)
-
-	re = regexp.MustCompile("^*<Incarnation number=\"\\d*\" instance=\"(.*)\" guid=\"{[-0-9a-fA-F]+}\"[\\s]*/>")
-	match = re.FindStringSubmatch(contents)
-	if match == nil {
-		return "", bosherr.WrapError(err, "Find instance name in SharedConfig.xml")
-	}
-
-	vm_name := match[1]
-	ms.logger.Debug(ms.logTag, "Read instance name %#v", vm_name)
-
-	return service_name + "&" + vm_name, nil
+	return ms.GetServerName()
 }
 
 func (ms azureFileMetadataService) GetServerName() (string, error) {

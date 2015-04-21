@@ -34,7 +34,7 @@ func NewAzureInfrastructure(
 }
 
 func NewAzureRegistry(metadataService MetadataService) Registry {
-	return NewHTTPRegistry(metadataService, false)
+	return NewHTTPRegistry(metadataService, true)
 }
 
 func (inf azureInfrastructure) GetDevicePathResolver() boshdpresolv.DevicePathResolver {
