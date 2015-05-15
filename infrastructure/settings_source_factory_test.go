@@ -94,17 +94,18 @@ var _ = Describe("SettingsSourceFactory", func() {
 							FileSourceOptions{
 								MetaDataPath: "fake-meta-data-path",
 								UserDataPath: "fake-user-data-path",
-
 								SettingsPath: "fake-settings-path",
 							},
 						}
 					})
 
 					It("returns a settings source that uses file to fetch settings", func() {
+						resolver := NewRegistryEndpointResolver(NewDigDNSResolver(platform.GetRunner(), logger))
 						fileMetadataService := NewFileMetadataService(
 							"fake-meta-data-path",
 							"fake-user-data-path",
 							"fake-settings-path",
+							resolver,
 							platform.GetFs(),
 							logger,
 						)

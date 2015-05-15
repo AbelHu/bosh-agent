@@ -115,6 +115,7 @@ func (f SettingsSourceFactory) buildWithRegistry() (boshsettings.Source, error) 
 				typedOpts.MetaDataPath,
 				typedOpts.UserDataPath,
 				typedOpts.SettingsPath,
+				resolver,
 				f.platform.GetFs(),
 				f.logger,
 			)

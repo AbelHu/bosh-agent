@@ -13,6 +13,7 @@ type fileMetadataService struct {
 	metaDataFilePath string
 	userDataFilePath string
 	settingsFilePath string
+	resolver         DNSResolver
 	fs               boshsys.FileSystem
 
 	logger boshlog.Logger
@@ -23,6 +24,7 @@ func NewFileMetadataService(
 	metaDataFilePath string,
 	userDataFilePath string,
 	settingsFilePath string,
+	resolver DNSResolver,
 	fs boshsys.FileSystem,
 	logger boshlog.Logger,
 ) MetadataService {
@@ -30,6 +32,7 @@ func NewFileMetadataService(
 		metaDataFilePath: metaDataFilePath,
 		userDataFilePath: userDataFilePath,
 		settingsFilePath: settingsFilePath,
+		resolver:         resolver,
 		fs:               fs,
 
 		logTag: "fileMetadataService",
@@ -72,12 +75,12 @@ func (ms fileMetadataService) GetServerName() (string, error) {
 
 	contents, err := ms.fs.ReadFile(ms.userDataFilePath)
 	if err != nil {
-		return nil, bosherr.WrapError(err, "Reading user data")
+		return "", bosherr.WrapError(err, "Reading user data")
 	}
 
 	err = json.Unmarshal([]byte(contents), &userData)
 	if err != nil {
-		return nil, bosherr.WrapError(err, "Unmarshalling user data")
+		return "", bosherr.WrapError(err, "Unmarshalling user data")
 	}
 
 	ms.logger.Debug(ms.logTag, "Read user data '%#v'", userData)
