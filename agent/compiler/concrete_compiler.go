@@ -36,15 +36,16 @@ func NewConcreteCompiler(
 	compileDirProvider CompileDirProvider,
 	packageApplier packages.Applier,
 	packagesBc boshbc.BundleCollection,
-) (c concreteCompiler) {
-	c.compressor = compressor
-	c.blobstore = blobstore
-	c.fs = fs
-	c.runner = runner
-	c.compileDirProvider = compileDirProvider
-	c.packageApplier = packageApplier
-	c.packagesBc = packagesBc
-	return
+) Compiler {
+	return concreteCompiler{
+		compressor:         compressor,
+		blobstore:          blobstore,
+		fs:                 fs,
+		runner:             runner,
+		compileDirProvider: compileDirProvider,
+		packageApplier:     packageApplier,
+		packagesBc:         packagesBc,
+	}
 }
 
 func (c concreteCompiler) Compile(pkg Package, deps []boshmodels.Package) (string, string, error) {
@@ -65,6 +66,8 @@ func (c concreteCompiler) Compile(pkg Package, deps []boshmodels.Package) (strin
 	if err != nil {
 		return "", "", bosherr.WrapErrorf(err, "Fetching package %s", pkg.Name)
 	}
+
+	defer c.fs.RemoveAll(compilePath)
 
 	compiledPkg := boshmodels.Package{
 		Name:    pkg.Name,
@@ -127,6 +130,11 @@ func (c concreteCompiler) Compile(pkg Package, deps []boshmodels.Package) (strin
 	err = compiledPkgBundle.Uninstall()
 	if err != nil {
 		return "", "", bosherr.WrapError(err, "Uninstalling compiled package")
+	}
+
+	err = c.packageApplier.KeepOnly([]boshmodels.Package{})
+	if err != nil {
+		return "", "", bosherr.WrapError(err, "Removing packages")
 	}
 
 	return uploadedBlobID, sha1, nil

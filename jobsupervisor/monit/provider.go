@@ -8,7 +8,6 @@ import (
 	boshhttp "github.com/cloudfoundry/bosh-agent/http"
 	boshlog "github.com/cloudfoundry/bosh-agent/logger"
 	boshplatform "github.com/cloudfoundry/bosh-agent/platform"
-	boshtime "github.com/cloudfoundry/bosh-agent/time"
 )
 
 const (
@@ -18,6 +17,10 @@ const (
 	monitHost                  = "127.0.0.1:2822"
 )
 
+type ClientProvider interface {
+	Get() (Client, error)
+}
+
 type clientProvider struct {
 	platform        boshplatform.Platform
 	logger          boshlog.Logger
@@ -25,14 +28,23 @@ type clientProvider struct {
 	longHTTPClient  boshhttp.Client
 }
 
-func NewProvider(platform boshplatform.Platform, logger boshlog.Logger, timeService boshtime.Service) clientProvider {
+func NewProvider(platform boshplatform.Platform, logger boshlog.Logger) ClientProvider {
 	httpClient := http.DefaultClient
 
-	shortRetryStrategy := boshhttp.NewAttemptRetryStrategy(shortRetryStrategyAttempts)
-	shortHTTPClient := boshhttp.NewRetryClient(httpClient, shortRetryStrategy, retryDelay, timeService, logger)
+	shortHTTPClient := boshhttp.NewRetryClient(
+		httpClient,
+		shortRetryStrategyAttempts,
+		retryDelay,
+		logger,
+	)
 
-	longRetryStrategy := NewMonitRetryStrategy(longRetryStrategyAttempts, shortRetryStrategyAttempts)
-	longHTTPClient := boshhttp.NewRetryClient(httpClient, longRetryStrategy, retryDelay, timeService, logger)
+	longHTTPClient := NewMonitRetryClient(
+		httpClient,
+		longRetryStrategyAttempts,
+		shortRetryStrategyAttempts,
+		retryDelay,
+		logger,
+	)
 
 	return clientProvider{
 		platform:        platform,

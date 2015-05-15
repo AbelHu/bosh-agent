@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	osuser "os/user"
 	"path/filepath"
 	"strings"
 
@@ -40,7 +41,28 @@ func init() {
 
 			homeDir, err := osFs.HomeDir("root")
 			Expect(err).ToNot(HaveOccurred())
-			assert.Contains(GinkgoT(), homeDir, "/root")
+			Expect(homeDir).To(ContainSubstring("/root"))
+		})
+
+		It("expand path", func() {
+			osFs, _ := createOsFs()
+
+			expandedPath, err := osFs.ExpandPath("~/fake-dir/fake-file.txt")
+			Expect(err).ToNot(HaveOccurred())
+
+			currentUser, err := osuser.Current()
+			Expect(err).ToNot(HaveOccurred())
+			Expect(expandedPath).To(Equal(currentUser.HomeDir + "/fake-dir/fake-file.txt"))
+
+			expandedPath, err = osFs.ExpandPath("/fake-dir//fake-file.txt")
+			Expect(err).ToNot(HaveOccurred())
+			Expect(expandedPath).To(Equal("/fake-dir/fake-file.txt"))
+
+			expandedPath, err = osFs.ExpandPath("./fake-file.txt")
+			Expect(err).ToNot(HaveOccurred())
+			currentDir, err := os.Getwd()
+			Expect(err).ToNot(HaveOccurred())
+			Expect(expandedPath).To(Equal(currentDir + "/fake-file.txt"))
 		})
 
 		It("mkdir all", func() {
@@ -439,6 +461,78 @@ func init() {
 
 				os.Remove(srcFile.Name())
 				os.Remove(dstFile.Name())
+			})
+		})
+
+		Describe("CopyDir", func() {
+			var fixtureFiles = []string{
+				"foo.txt",
+				"bar/bar.txt",
+				"bar/baz/.gitkeep",
+			}
+
+			It("recursively copies directory contents", func() {
+				osFs, _ := createOsFs()
+				srcPath := "../Fixtures/test_copy_dir_entries"
+				dstPath, err := osFs.TempDir("CopyDirTestDir")
+				Expect(err).ToNot(HaveOccurred())
+				defer osFs.RemoveAll(dstPath)
+
+				err = osFs.CopyDir(srcPath, dstPath)
+				Expect(err).ToNot(HaveOccurred())
+
+				for _, fixtureFile := range fixtureFiles {
+					srcContents, err := osFs.ReadFile(filepath.Join(srcPath, fixtureFile))
+					Expect(err).ToNot(HaveOccurred())
+
+					dstContents, err := osFs.ReadFile(filepath.Join(dstPath, fixtureFile))
+					Expect(err).ToNot(HaveOccurred())
+
+					Expect(srcContents).To(Equal(dstContents), "Copied file does not match source file: '%s", fixtureFile)
+				}
+			})
+
+			It("does not leak file descriptors", func() {
+				osFs, _ := createOsFs()
+				srcPath := "../Fixtures/test_copy_dir_entries"
+				dstPath, err := osFs.TempDir("CopyDirTestDir")
+				Expect(err).ToNot(HaveOccurred())
+				defer osFs.RemoveAll(dstPath)
+
+				err = osFs.CopyDir(srcPath, dstPath)
+				Expect(err).ToNot(HaveOccurred())
+
+				runner := NewExecCmdRunner(boshlog.NewLogger(boshlog.LevelNone))
+				stdout, _, _, err := runner.RunCommand("lsof")
+				Expect(err).ToNot(HaveOccurred())
+
+				// lsof uses absolute paths
+				srcPath, err = filepath.Abs(srcPath)
+				Expect(err).ToNot(HaveOccurred())
+
+				for _, line := range strings.Split(stdout, "\n") {
+					for _, fixtureFile := range fixtureFiles {
+						srcFilePath := filepath.Join(srcPath, fixtureFile)
+						if strings.Contains(line, srcFilePath) {
+							Fail(fmt.Sprintf("CopyDir did not close source file: %s", srcFilePath))
+						}
+
+						srcFileDirPath := filepath.Dir(srcFilePath)
+						if strings.Contains(line, srcFileDirPath) {
+							Fail(fmt.Sprintf("CopyDir did not close source dir: %s", srcFileDirPath))
+						}
+
+						dstFilePath := filepath.Join(dstPath, fixtureFile)
+						if strings.Contains(line, dstFilePath) {
+							Fail(fmt.Sprintf("CopyDir did not close destination file: %s", dstFilePath))
+						}
+
+						dstFileDirPath := filepath.Dir(dstFilePath)
+						if strings.Contains(line, dstFileDirPath) {
+							Fail(fmt.Sprintf("CopyDir did not close destination dir: %s", dstFileDirPath))
+						}
+					}
+				}
 			})
 		})
 

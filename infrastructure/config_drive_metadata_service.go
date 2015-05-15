@@ -6,41 +6,48 @@ import (
 	bosherr "github.com/cloudfoundry/bosh-agent/errors"
 	boshlog "github.com/cloudfoundry/bosh-agent/logger"
 	boshplatform "github.com/cloudfoundry/bosh-agent/platform"
+	boshsettings "github.com/cloudfoundry/bosh-agent/settings"
 )
 
 type configDriveMetadataService struct {
-	metadataContents MetadataContentsType
-	userdataContents UserDataContentsType
-	resolver         DNSResolver
-	platform         boshplatform.Platform
+	resolver DNSResolver
+	platform boshplatform.Platform
+
 	diskPaths        []string
-	metadataFilePath string
-	userdataFilePath string
-	logger           boshlog.Logger
-	logTag           string
+	metaDataFilePath string
+	userDataFilePath string
+
+	// Loaded state
+	metaDataContents MetadataContentsType
+	userDataContents UserDataContentsType
+
+	logger boshlog.Logger
+	logTag string
 }
 
 func NewConfigDriveMetadataService(
 	resolver DNSResolver,
 	platform boshplatform.Platform,
 	diskPaths []string,
-	metadataFilePath string,
-	userdataFilePath string,
+	metaDataFilePath string,
+	userDataFilePath string,
 	logger boshlog.Logger,
-) *configDriveMetadataService {
+) MetadataService {
 	return &configDriveMetadataService{
-		resolver:         resolver,
-		platform:         platform,
+		resolver: resolver,
+		platform: platform,
+
 		diskPaths:        diskPaths,
-		metadataFilePath: metadataFilePath,
-		userdataFilePath: userdataFilePath,
-		logger:           logger,
-		logTag:           "ConfigDriveMetadataService",
+		metaDataFilePath: metaDataFilePath,
+		userDataFilePath: userDataFilePath,
+
+		logTag: "ConfigDriveMetadataService",
+		logger: logger,
 	}
 }
 
 func (ms *configDriveMetadataService) GetPublicKey() (string, error) {
-	if firstPublicKey, ok := ms.metadataContents.PublicKeys["0"]; ok {
+	if firstPublicKey, ok := ms.metaDataContents.PublicKeys["0"]; ok {
 		if openSSHKey, ok := firstPublicKey["openssh-key"]; ok {
 			return openSSHKey, nil
 		}
@@ -50,30 +57,30 @@ func (ms *configDriveMetadataService) GetPublicKey() (string, error) {
 }
 
 func (ms *configDriveMetadataService) GetInstanceID() (string, error) {
-	if ms.metadataContents.InstanceID == "" {
+	if ms.metaDataContents.InstanceID == "" {
 		return "", bosherr.Error("Failed to load instance-id from config drive metadata service")
 	}
 
-	ms.logger.Debug(ms.logTag, "Getting instance id: %s", ms.metadataContents.InstanceID)
-	return ms.metadataContents.InstanceID, nil
+	ms.logger.Debug(ms.logTag, "Getting instance id: %s", ms.metaDataContents.InstanceID)
+	return ms.metaDataContents.InstanceID, nil
 }
 
 func (ms *configDriveMetadataService) GetServerName() (string, error) {
-	if ms.userdataContents.Server.Name == "" {
+	if ms.userDataContents.Server.Name == "" {
 		return "", bosherr.Error("Failed to load server name from config drive metadata service")
 	}
 
-	ms.logger.Debug(ms.logTag, "Getting server name: %s", ms.userdataContents.Server.Name)
-	return ms.userdataContents.Server.Name, nil
+	ms.logger.Debug(ms.logTag, "Getting server name: %s", ms.userDataContents.Server.Name)
+	return ms.userDataContents.Server.Name, nil
 }
 
 func (ms *configDriveMetadataService) GetRegistryEndpoint() (string, error) {
-	if ms.userdataContents.Registry.Endpoint == "" {
+	if ms.userDataContents.Registry.Endpoint == "" {
 		return "", bosherr.Error("Failed to load registry endpoint from config drive metadata service")
 	}
 
-	endpoint := ms.userdataContents.Registry.Endpoint
-	nameServers := ms.userdataContents.DNS.Nameserver
+	endpoint := ms.userDataContents.Registry.Endpoint
+	nameServers := ms.userDataContents.DNS.Nameserver
 
 	if len(nameServers) == 0 {
 		ms.logger.Debug(ms.logTag, "Getting registry endpoint %s", endpoint)
@@ -89,12 +96,22 @@ func (ms *configDriveMetadataService) GetRegistryEndpoint() (string, error) {
 	return resolvedEndpoint, nil
 }
 
+func (ms *configDriveMetadataService) GetNetworks() (boshsettings.Networks, error) {
+	return ms.userDataContents.Networks, nil
+}
+
 func (ms *configDriveMetadataService) IsAvailable() bool {
+	if len(ms.diskPaths) == 0 {
+		ms.logger.Warn(ms.logTag, "Disk paths are not given")
+		return false
+	}
+
 	return ms.load() == nil
 }
 
 func (ms *configDriveMetadataService) load() error {
 	ms.logger.Debug(ms.logTag, "Loading config drive metadata service")
+
 	var err error
 
 	for _, diskPath := range ms.diskPaths {
@@ -111,27 +128,30 @@ func (ms *configDriveMetadataService) load() error {
 }
 
 func (ms *configDriveMetadataService) loadFromDiskPath(diskPath string) error {
-	contents, err := ms.platform.GetFilesContentsFromDisk(
-		diskPath,
-		[]string{ms.metadataFilePath, ms.userdataFilePath},
-	)
+	contentPaths := []string{ms.metaDataFilePath, ms.userDataFilePath}
+
+	contents, err := ms.platform.GetFilesContentsFromDisk(diskPath, contentPaths)
 	if err != nil {
 		return bosherr.WrapError(err, "Reading files on config drive")
 	}
 
 	var metadata MetadataContentsType
+
 	err = json.Unmarshal(contents[0], &metadata)
 	if err != nil {
 		return bosherr.WrapError(err, "Parsing config drive metadata from meta_data.json")
 	}
-	ms.metadataContents = metadata
+
+	ms.metaDataContents = metadata
 
 	var userdata UserDataContentsType
+
 	err = json.Unmarshal(contents[1], &userdata)
 	if err != nil {
 		return bosherr.WrapError(err, "Parsing config drive metadata from user_data")
 	}
-	ms.userdataContents = userdata
+
+	ms.userDataContents = userdata
 
 	return nil
 }

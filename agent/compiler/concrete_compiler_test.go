@@ -3,7 +3,6 @@ package compiler_test
 import (
 	"errors"
 	"os"
-	"time"
 
 	. "github.com/onsi/ginkgo"
 	. "github.com/onsi/gomega"
@@ -122,10 +121,10 @@ func init() {
 				Expect(sha1).To(Equal("fake-blob-sha1"))
 			})
 
-			It("cleans up all packages before applying dependent packages", func() {
+			It("cleans up all packages before and after applying dependent packages", func() {
 				_, _, err := compiler.Compile(pkg, pkgDeps)
 				Expect(err).ToNot(HaveOccurred())
-				Expect(packageApplier.ActionsCalled).To(Equal([]string{"KeepOnly", "Apply", "Apply"}))
+				Expect(packageApplier.ActionsCalled).To(Equal([]string{"KeepOnly", "Apply", "Apply", "KeepOnly"}))
 				Expect(packageApplier.KeptOnlyPackages).To(BeEmpty())
 			})
 
@@ -145,18 +144,12 @@ func init() {
 				Expect(blobstore.GetFingerprints[0]).To(Equal(""))
 			})
 
-			It("fetches source package from blobstore and checks SHA1 by default in future", func() {
+			PIt("(Pending Tracker Story: <https://www.pivotaltracker.com/story/show/94524232>) fetches source package from blobstore and checks SHA1 by default in future", func() {
 				_, _, err := compiler.Compile(pkg, pkgDeps)
 				Expect(err).ToNot(HaveOccurred())
 
 				Expect(blobstore.GetBlobIDs[0]).To(Equal("blobstore_id"))
-
-				// Do not implement SHA1 check in order to not break deployments for current users
-				fixDeadline := time.Date(2015, time.May, 13, 6, 0, 0, 0, time.UTC)
-
-				if time.Now().After(fixDeadline) {
-					Expect(blobstore.GetFingerprints[0]).To(Equal("sha1"))
-				}
+				Expect(blobstore.GetFingerprints[0]).To(Equal("sha1"))
 			})
 
 			It("returns an error if removing compile target directory during uncompression fails", func() {
@@ -197,16 +190,10 @@ func init() {
 				Expect(packageApplier.AppliedPackages).To(Equal(pkgDeps))
 			})
 
-			It("extracts source package to compile dir", func() {
+			It("cleans up the compile directory", func() {
 				_, _, err := compiler.Compile(pkg, pkgDeps)
 				Expect(err).ToNot(HaveOccurred())
-
-				Expect(fs.FileExists("/fake-compile-dir/pkg_name")).To(BeTrue())
-				Expect(compressor.DecompressFileToDirDirs[0]).To(Equal("/fake-compile-dir/pkg_name-bosh-agent-unpack"))
-				Expect(compressor.DecompressFileToDirTarballPaths[0]).To(Equal(blobstore.GetFileName))
-
-				Expect(fs.RenameOldPaths[0]).To(Equal("/fake-compile-dir/pkg_name-bosh-agent-unpack"))
-				Expect(fs.RenameNewPaths[0]).To(Equal("/fake-compile-dir/pkg_name"))
+				Expect(fs.FileExists("/fake-compile-dir/pkg_name")).To(BeFalse())
 			})
 
 			It("installs, enables and later cleans up bundle", func() {
@@ -267,7 +254,18 @@ func init() {
 			It("compresses compiled package", func() {
 				_, _, err := compiler.Compile(pkg, pkgDeps)
 				Expect(err).ToNot(HaveOccurred())
-				Expect(compressor.CompressFilesInDirDir).To(Equal("/fake-dir/data/packages/pkg_name/pkg_version"))
+
+				// archive was downloaded from the blobstore and decompress to this temp dir
+				Expect(compressor.DecompressFileToDirDirs[0]).To(Equal("/fake-compile-dir/pkg_name-bosh-agent-unpack"))
+				Expect(compressor.DecompressFileToDirTarballPaths[0]).To(Equal(blobstore.GetFileName))
+
+				// contents were moved from the temp dir to the install/enable dir
+				Expect(fs.RenameOldPaths[0]).To(Equal("/fake-compile-dir/pkg_name-bosh-agent-unpack"))
+				Expect(fs.RenameNewPaths[0]).To(Equal("/fake-compile-dir/pkg_name"))
+
+				// install path, presumably with your packaged code, was compressed
+				installPath := "/fake-dir/data/packages/pkg_name/pkg_version"
+				Expect(compressor.CompressFilesInDirDir).To(Equal(installPath))
 			})
 
 			It("uploads compressed package to blobstore", func() {

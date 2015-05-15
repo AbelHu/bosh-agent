@@ -1,30 +1,49 @@
-#!/bin/bash
+#!/usr/bin/env bash
 
-base=$( cd $(dirname $0)/.. && pwd )
+set -e -x
 
-if [ ! -d $base/tmp/bosh ]; then
-  echo -e "\n Cloning BOSH..."
-  rm -rf $base/tmp
+bin=$(dirname $0)
+
+base=$( cd ${bin}/.. && pwd )
+if [ ! -d $base/tmp ]; then
   mkdir -p $base/tmp
-  git clone --depth 1 --branch master https://github.com/cloudfoundry/bosh.git $base/tmp/bosh
-else
-  echo -e "\n Updating BOSH to origin/master..."
-  (
-    cd $base/tmp/bosh
-    git clean -dfx
-    git fetch https://github.com/cloudfoundry/bosh.git master
-    git reset --hard FETCH_HEAD
-  )
 fi
 
-cd $base/tmp/bosh
+cleanup() {
+	echo "Cleaning up"
 
-echo -e "\n Installing BOSH dependencies..."
-bundle install
+  (cd $base && vagrant destroy -f)
 
-echo -e "\n Linking bosh agent..."
-rm -rf go/src/github.com/cloudfoundry/bosh-agent
-ln -s $base go/src/github.com/cloudfoundry/bosh-agent
+  if [ ! -z "$OLD_BOSH_LITE_PRIVATE_KEY" ]; then
+    export BOSH_LITE_PRIVATE_KEY=$OLD_BOSH_LITE_PRIVATE_KEY
+  fi
 
-echo -e "\n Running integration tests..."
-bundle exec rake spec:integration
+  if [ -f "$tmpfile" ]; then
+    rm -rf $tmpfile
+  fi
+}
+
+trap cleanup EXIT
+
+# Vagrant needs ubuntu to own the private key if aws provider
+if [ ! -z "$BOSH_LITE_PRIVATE_KEY" ]; then
+  tmpfile=`mktemp -t bosh-agent-tests-XXXXXXXX`
+  cat $BOSH_LITE_PRIVATE_KEY > $tmpfile
+  export OLD_BOSH_LITE_PRIVATE_KEY=$BOSH_LITE_PRIVATE_KEY
+  export BOSH_LITE_PRIVATE_KEY=$tmpfile
+fi
+
+cd $base
+echo -e "\n Running agent integration tests..."
+$bin/env go clean -r github.com/cloudfoundry/bosh-agent/
+vagrant up $@
+
+vagrant ssh-config > $base/tmp/vagrant-config
+
+echo -e "\n Installing ginkgo..."
+$bin/go install github.com/onsi/ginkgo/ginkgo
+
+echo -e "\n Running tests..."
+$bin/env ginkgo -race -trace integration
+
+exit 0

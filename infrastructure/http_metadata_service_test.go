@@ -9,20 +9,62 @@ import (
 	. "github.com/onsi/ginkgo"
 	. "github.com/onsi/gomega"
 
-	. "github.com/cloudfoundry/bosh-agent/infrastructure"
 	fakeinf "github.com/cloudfoundry/bosh-agent/infrastructure/fakes"
+	boshlog "github.com/cloudfoundry/bosh-agent/logger"
+	fakeplat "github.com/cloudfoundry/bosh-agent/platform/fakes"
+	boshsettings "github.com/cloudfoundry/bosh-agent/settings"
+
+	. "github.com/cloudfoundry/bosh-agent/infrastructure"
 )
 
-var _ = Describe("HTTPMetadataService", func() {
+var _ = Describe("HTTPMetadataService", describeHTTPMetadataService)
+
+func describeHTTPMetadataService() {
 	var (
 		dnsResolver     *fakeinf.FakeDNSResolver
+		platform        *fakeplat.FakePlatform
+		logger          boshlog.Logger
 		metadataService MetadataService
 	)
 
 	BeforeEach(func() {
 		dnsResolver = &fakeinf.FakeDNSResolver{}
-		metadataService = NewHTTPMetadataService("fake-metadata-host", dnsResolver)
+		platform = fakeplat.NewFakePlatform()
+		logger = boshlog.NewLogger(boshlog.LevelNone)
+		metadataService = NewHTTPMetadataService("fake-metadata-host", dnsResolver, platform, logger)
 	})
+
+	ItEnsuresMinimalNetworkSetup := func(subject func() (string, error)) {
+		Context("when no networks are configured", func() {
+			BeforeEach(func() {
+				platform.GetConfiguredNetworkInterfacesInterfaces = []string{}
+			})
+
+			It("sets up DHCP network", func() {
+				_, err := subject()
+				Expect(err).ToNot(HaveOccurred())
+
+				Expect(platform.SetupNetworkingCalled).To(BeTrue())
+				Expect(platform.SetupNetworkingNetworks).To(Equal(boshsettings.Networks{
+					"eth0": boshsettings.Network{
+						Type: "dynamic",
+					},
+				}))
+			})
+
+			Context("when setting up DHCP fails", func() {
+				BeforeEach(func() {
+					platform.SetupNetworkingErr = errors.New("fake-network-error")
+				})
+
+				It("returns an error", func() {
+					_, err := subject()
+					Expect(err).To(HaveOccurred())
+					Expect(err.Error()).To(ContainSubstring("fake-network-error"))
+				})
+			})
+		})
+	}
 
 	Describe("IsAvailable", func() {
 		It("returns true", func() {
@@ -47,11 +89,15 @@ var _ = Describe("HTTPMetadataService", func() {
 
 			ts = httptest.NewServer(handler)
 
-			metadataService = NewHTTPMetadataService(ts.URL, dnsResolver)
+			metadataService = NewHTTPMetadataService(ts.URL, dnsResolver, platform, logger)
 		})
 
 		AfterEach(func() {
 			ts.Close()
+		})
+
+		ItEnsuresMinimalNetworkSetup(func() (string, error) {
+			return metadataService.GetPublicKey()
 		})
 
 		It("returns fetched public key", func() {
@@ -78,11 +124,15 @@ var _ = Describe("HTTPMetadataService", func() {
 
 			ts = httptest.NewServer(handler)
 
-			metadataService = NewHTTPMetadataService(ts.URL, dnsResolver)
+			metadataService = NewHTTPMetadataService(ts.URL, dnsResolver, platform, logger)
 		})
 
 		AfterEach(func() {
 			ts.Close()
+		})
+
+		ItEnsuresMinimalNetworkSetup(func() (string, error) {
+			return metadataService.GetInstanceID()
 		})
 
 		It("returns fetched instance id", func() {
@@ -120,7 +170,7 @@ var _ = Describe("HTTPMetadataService", func() {
 
 			handler := http.HandlerFunc(handlerFunc)
 			ts = httptest.NewServer(handler)
-			metadataService = NewHTTPMetadataService(ts.URL, dnsResolver)
+			metadataService = NewHTTPMetadataService(ts.URL, dnsResolver, platform, logger)
 		})
 
 		AfterEach(func() {
@@ -137,6 +187,10 @@ var _ = Describe("HTTPMetadataService", func() {
 				name, err := metadataService.GetServerName()
 				Expect(err).ToNot(HaveOccurred())
 				Expect(name).To(Equal("fake-server-name"))
+			})
+
+			ItEnsuresMinimalNetworkSetup(func() (string, error) {
+				return metadataService.GetServerName()
 			})
 		})
 
@@ -187,11 +241,15 @@ var _ = Describe("HTTPMetadataService", func() {
 
 			handler := http.HandlerFunc(handlerFunc)
 			ts = httptest.NewServer(handler)
-			metadataService = NewHTTPMetadataService(ts.URL, dnsResolver)
+			metadataService = NewHTTPMetadataService(ts.URL, dnsResolver, platform, logger)
 		})
 
 		AfterEach(func() {
 			ts.Close()
+		})
+
+		ItEnsuresMinimalNetworkSetup(func() (string, error) {
+			return metadataService.GetRegistryEndpoint()
 		})
 
 		Context("when metadata contains a dns server", func() {
@@ -238,4 +296,10 @@ var _ = Describe("HTTPMetadataService", func() {
 			})
 		})
 	})
-})
+
+	Describe("GetNetworks", func() {
+		It("returns nil networks, since you don't need them for bootstrapping since your network must be set up before you can get the metadata", func() {
+			Expect(metadataService.GetNetworks()).To(BeNil())
+		})
+	})
+}

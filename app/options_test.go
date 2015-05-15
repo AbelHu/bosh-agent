@@ -1,23 +1,11 @@
-package app_test
+package app
 
 import (
 	. "github.com/onsi/ginkgo"
 	. "github.com/onsi/gomega"
-
-	. "github.com/cloudfoundry/bosh-agent/app"
 )
 
 var _ = Describe("ParseOptions", func() {
-	It("parses the infrastructure", func() {
-		opts, err := ParseOptions([]string{"bosh-agent", "-I", "foo"})
-		Expect(err).ToNot(HaveOccurred())
-		Expect(opts.InfrastructureName).To(Equal("foo"))
-
-		opts, err = ParseOptions([]string{"bosh-agent"})
-		Expect(err).ToNot(HaveOccurred())
-		Expect(opts.InfrastructureName).To(Equal(""))
-	})
-
 	It("parses the platform", func() {
 		opts, err := ParseOptions([]string{"bosh-agent", "-P", "baz"})
 		Expect(err).ToNot(HaveOccurred())

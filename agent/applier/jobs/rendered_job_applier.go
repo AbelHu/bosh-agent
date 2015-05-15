@@ -37,7 +37,7 @@ func NewRenderedJobApplier(
 	compressor boshcmd.Compressor,
 	fs boshsys.FileSystem,
 	logger boshlog.Logger,
-) *renderedJobApplier {
+) Applier {
 	return &renderedJobApplier{
 		jobsBc:                 jobsBc,
 		jobSupervisor:          jobSupervisor,
@@ -113,16 +113,18 @@ func (s *renderedJobApplier) downloadAndInstall(job models.Job, jobBundle boshbc
 		return bosherr.WrapError(err, "Decompressing files to temp dir")
 	}
 
-	files, err := s.fs.Glob(filepath.Join(tmpDir, job.Source.PathInArchive, "bin", "*"))
-	if err != nil {
-		return bosherr.WrapError(err, "Finding job binary files")
-	}
-
-	for _, f := range files {
-		err = s.fs.Chmod(f, os.FileMode(0755))
+	binPath := filepath.Join(tmpDir, job.Source.PathInArchive, "bin") + "/"
+	err = s.fs.Walk(filepath.Join(tmpDir, job.Source.PathInArchive), func(path string, info os.FileInfo, err error) error {
 		if err != nil {
-			return bosherr.WrapErrorf(err, "Making %s executable", f)
+			return err
+		} else if info.IsDir() || strings.HasPrefix(path, binPath) {
+			return s.fs.Chmod(path, os.FileMode(0755))
+		} else {
+			return s.fs.Chmod(path, os.FileMode(0644))
 		}
+	})
+	if err != nil {
+		return bosherr.WrapError(err, "Correcting file permissions")
 	}
 
 	_, _, err = jobBundle.Install(filepath.Join(tmpDir, job.Source.PathInArchive))

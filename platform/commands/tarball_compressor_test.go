@@ -13,6 +13,7 @@ import (
 	. "github.com/cloudfoundry/bosh-agent/platform/commands"
 	boshsys "github.com/cloudfoundry/bosh-agent/system"
 	fakesys "github.com/cloudfoundry/bosh-agent/system/fakes"
+	"strings"
 )
 
 func fixtureSrcDir() string {
@@ -27,7 +28,7 @@ func fixtureSrcTgz() string {
 	return filepath.Join(pwd, "..", "..", "Fixtures", "compressor-decompress-file-to-dir.tgz")
 }
 
-func BeDir() beDirMatcher {
+func beDir() beDirMatcher {
 	return beDirMatcher{}
 }
 
@@ -97,6 +98,26 @@ var _ = Describe("tarballCompressor", func() {
 			Expect(err).ToNot(HaveOccurred())
 			defer os.Remove(tgzName)
 
+			tarballContents, _, _, err := cmdRunner.RunCommand("tar", "-tf", tgzName)
+			Expect(err).ToNot(HaveOccurred())
+
+			contentElements := strings.Split(strings.TrimSpace(tarballContents), "\n")
+
+			Expect(contentElements).To(ConsistOf(
+				"./",
+				"./app.stderr.log",
+				"./app.stdout.log",
+				"./other_logs/",
+				"./some_directory/",
+				"./some_directory/sub_dir/",
+				"./some_directory/sub_dir/other_sub_dir/",
+				"./some_directory/sub_dir/other_sub_dir/.keep",
+				"./other_logs/more_logs/",
+				"./other_logs/other_app.stderr.log",
+				"./other_logs/other_app.stdout.log",
+				"./other_logs/more_logs/more.stdout.log",
+			))
+
 			_, _, _, err = cmdRunner.RunCommand("tar", "-xzpf", tgzName, "-C", dstDir)
 			Expect(err).ToNot(HaveOccurred())
 
@@ -131,8 +152,8 @@ var _ = Describe("tarballCompressor", func() {
 			Expect(err).ToNot(HaveOccurred())
 			Expect(content).To(ContainSubstring("double-nested-file"))
 
-			Expect(dstDir + "/empty-dir").To(BeDir())
-			Expect(dstDir + "/dir/empty-nested-dir").To(BeDir())
+			Expect(dstDir + "/empty-dir").To(beDir())
+			Expect(dstDir + "/dir/empty-nested-dir").To(beDir())
 		})
 
 		It("returns error if the destination does not exist", func() {

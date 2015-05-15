@@ -20,27 +20,33 @@ import (
 	fakenet "github.com/cloudfoundry/bosh-agent/platform/net/fakes"
 	fakestats "github.com/cloudfoundry/bosh-agent/platform/stats/fakes"
 	boshvitals "github.com/cloudfoundry/bosh-agent/platform/vitals"
+	fakeretry "github.com/cloudfoundry/bosh-agent/retrystrategy/fakes"
 	boshsettings "github.com/cloudfoundry/bosh-agent/settings"
 	boshdirs "github.com/cloudfoundry/bosh-agent/settings/directories"
 	fakesys "github.com/cloudfoundry/bosh-agent/system/fakes"
 )
 
-var _ = Describe("LinuxPlatform", func() {
+var _ = Describe("LinuxPlatform", describeLinuxPlatform)
+
+func describeLinuxPlatform() {
 	var (
-		collector          *fakestats.FakeCollector
-		fs                 *fakesys.FakeFileSystem
-		cmdRunner          *fakesys.FakeCmdRunner
-		diskManager        *fakedisk.FakeDiskManager
-		dirProvider        boshdirs.Provider
-		devicePathResolver *fakedpresolv.FakeDevicePathResolver
-		platform           Platform
-		cdutil             *fakedevutil.FakeDeviceUtil
-		compressor         boshcmd.Compressor
-		copier             boshcmd.Copier
-		vitalsService      boshvitals.Service
-		netManager         *fakenet.FakeManager
-		options            LinuxOptions
-		logger             boshlog.Logger
+		collector                  *fakestats.FakeCollector
+		fs                         *fakesys.FakeFileSystem
+		cmdRunner                  *fakesys.FakeCmdRunner
+		diskManager                *fakedisk.FakeDiskManager
+		dirProvider                boshdirs.Provider
+		devicePathResolver         *fakedpresolv.FakeDevicePathResolver
+		platform                   Platform
+		cdutil                     *fakedevutil.FakeDeviceUtil
+		compressor                 boshcmd.Compressor
+		copier                     boshcmd.Copier
+		vitalsService              boshvitals.Service
+		netManager                 *fakenet.FakeManager
+		monitRetryStrategy         *fakeretry.FakeRetryStrategy
+		fakeDefaultNetworkResolver *fakenet.FakeDefaultNetworkResolver
+
+		options LinuxOptions
+		logger  boshlog.Logger
 	)
 
 	BeforeEach(func() {
@@ -56,7 +62,9 @@ var _ = Describe("LinuxPlatform", func() {
 		copier = boshcmd.NewCpCopier(cmdRunner, fs, logger)
 		vitalsService = boshvitals.NewService(collector, dirProvider)
 		netManager = &fakenet.FakeManager{}
+		monitRetryStrategy = fakeretry.NewFakeRetryStrategy()
 		devicePathResolver = fakedpresolv.NewFakeDevicePathResolver()
+		fakeDefaultNetworkResolver = &fakenet.FakeDefaultNetworkResolver{}
 		options = LinuxOptions{}
 
 		fs.SetGlob("/sys/bus/scsi/devices/*:0:0:0/block/*", []string{
@@ -82,12 +90,13 @@ var _ = Describe("LinuxPlatform", func() {
 			cdutil,
 			diskManager,
 			netManager,
+			monitRetryStrategy,
+			devicePathResolver,
 			5*time.Millisecond,
 			options,
 			logger,
+			fakeDefaultNetworkResolver,
 		)
-
-		platform.SetDevicePathResolver(devicePathResolver)
 	})
 
 	Describe("SetupRuntimeConfiguration", func() {
@@ -278,6 +287,18 @@ fake-base-path/data/sys/log/*.log fake-base-path/data/sys/log/*/*.log fake-base-
 	})
 
 	Describe("SetupEphemeralDiskWithPath", func() {
+		var (
+			partitioner *fakedisk.FakePartitioner
+			formatter   *fakedisk.FakeFormatter
+			mounter     *fakedisk.FakeMounter
+		)
+
+		BeforeEach(func() {
+			partitioner = diskManager.FakePartitioner
+			formatter = diskManager.FakeFormatter
+			mounter = diskManager.FakeMounter
+		})
+
 		itSetsUpEphemeralDisk := func(act func() error) {
 			It("sets up ephemeral disk with path", func() {
 				err := act()
@@ -287,21 +308,20 @@ fake-base-path/data/sys/log/*.log fake-base-path/data/sys/log/*/*.log fake-base-
 				Expect(dataDir.FileType).To(Equal(fakesys.FakeFileTypeDir))
 				Expect(dataDir.FileMode).To(Equal(os.FileMode(0750)))
 			})
+
+			It("creates new partition even if the data directory is not empty", func() {
+				fs.SetGlob(path.Join("/fake-dir", "data", "*"), []string{"something"})
+
+				err := act()
+				Expect(err).ToNot(HaveOccurred())
+				Expect(partitioner.PartitionCalled).To(BeTrue())
+				Expect(formatter.FormatCalled).To(BeTrue())
+				Expect(mounter.MountCalled).To(BeTrue())
+			})
 		}
 
 		Context("when ephemeral disk path is provided", func() {
 			act := func() error { return platform.SetupEphemeralDiskWithPath("/dev/xvda") }
-
-			var (
-				partitioner *fakedisk.FakePartitioner
-				formatter   *fakedisk.FakeFormatter
-				mounter     *fakedisk.FakeMounter
-			)
-			BeforeEach(func() {
-				partitioner = diskManager.FakePartitioner
-				formatter = diskManager.FakeFormatter
-				mounter = diskManager.FakeMounter
-			})
 
 			itSetsUpEphemeralDisk(act)
 
@@ -326,16 +346,6 @@ fake-base-path/data/sys/log/*.log fake-base-path/data/sys/log/*/*.log fake-base-
 				Expect(partitioner.PartitionCalled).To(BeFalse())
 				Expect(formatter.FormatCalled).To(BeFalse())
 				Expect(mounter.MountCalled).To(BeFalse())
-			})
-
-			It("create new partitions even if the data directory is not empty", func() {
-				fs.SetGlob(path.Join("/fake-dir", "data", "*"), []string{"something"})
-
-				err := act()
-				Expect(err).ToNot(HaveOccurred())
-				Expect(partitioner.PartitionCalled).To(BeTrue())
-				Expect(formatter.FormatCalled).To(BeTrue())
-				Expect(mounter.MountCalled).To(BeTrue())
 			})
 
 			It("returns err when mem stats are unavailable", func() {
@@ -419,54 +429,9 @@ fake-base-path/data/sys/log/*.log fake-base-path/data/sys/log/*/*.log fake-base-
 		Context("when ephemeral disk path is not provided", func() {
 			act := func() error { return platform.SetupEphemeralDiskWithPath("") }
 
-			var (
-				partitioner *fakedisk.FakePartitioner
-				formatter   *fakedisk.FakeFormatter
-				mounter     *fakedisk.FakeMounter
-			)
-			BeforeEach(func() {
-				partitioner = diskManager.FakeRootDevicePartitioner
-				formatter = diskManager.FakeFormatter
-				mounter = diskManager.FakeMounter
-			})
-
-			itSetsUpEphemeralDisk(act)
-
-			It("returns error if creating data dir fails", func() {
-				fs.MkdirAllError = errors.New("fake-mkdir-all-err")
-
-				err := act()
-				Expect(err).To(HaveOccurred())
-				Expect(err.Error()).To(ContainSubstring("fake-mkdir-all-err"))
-				Expect(partitioner.PartitionCalled).To(BeFalse())
-				Expect(formatter.FormatCalled).To(BeFalse())
-				Expect(mounter.MountCalled).To(BeFalse())
-			})
-
-			It("returns err when the data directory cannot be globbed", func() {
-				fs.GlobErr = errors.New("fake-glob-err")
-
-				err := act()
-				Expect(err).To(HaveOccurred())
-				Expect(err.Error()).To(ContainSubstring("Globbing ephemeral disk mount point `/fake-dir/data/*'"))
-				Expect(err.Error()).To(ContainSubstring("fake-glob-err"))
-				Expect(partitioner.PartitionCalled).To(BeFalse())
-				Expect(formatter.FormatCalled).To(BeFalse())
-				Expect(mounter.MountCalled).To(BeFalse())
-			})
-
-			It("does not create new partitions when the data directory is not empty", func() {
-				fs.SetGlob(path.Join("/fake-dir", "data", "*"), []string{"something"})
-
-				err := act()
-				Expect(err).ToNot(HaveOccurred())
-				Expect(partitioner.PartitionCalled).To(BeFalse())
-				Expect(formatter.FormatCalled).To(BeFalse())
-				Expect(mounter.MountCalled).To(BeFalse())
-			})
-
 			Context("when agent should partition ephemeral disk on root disk", func() {
 				BeforeEach(func() {
+					partitioner = diskManager.FakeRootDevicePartitioner
 					options.CreatePartitionIfNoEphemeralDisk = true
 				})
 
@@ -542,9 +507,10 @@ fake-base-path/data/sys/log/*.log fake-base-path/data/sys/log/*/*.log fake-base-
 								collector.MemStats.Total = 8
 							})
 
-							It("does not partition", func() {
+							It("returns an error", func() {
 								err := act()
-								Expect(err).ToNot(HaveOccurred())
+								Expect(err).To(HaveOccurred())
+								Expect(err.Error()).To(ContainSubstring("Insufficient remaining disk"))
 								Expect(partitioner.PartitionCalled).To(BeFalse())
 								Expect(formatter.FormatCalled).To(BeFalse())
 								Expect(mounter.MountCalled).To(BeFalse())
@@ -556,6 +522,8 @@ fake-base-path/data/sys/log/*.log fake-base-path/data/sys/log/*/*.log fake-base-
 								partitioner.GetDeviceSizeInBytesSizes["/dev/vda"] = 1024 * 1024 * 1024
 								collector.MemStats.Total = 256 * 1024 * 1024
 							})
+
+							itSetsUpEphemeralDisk(act)
 
 							It("returns err when mem stats are unavailable", func() {
 								collector.MemStatsErr = errors.New("fake-memstats-error")
@@ -668,6 +636,29 @@ fake-base-path/data/sys/log/*.log fake-base-path/data/sys/log/*/*.log fake-base-
 						})
 					})
 				})
+
+				It("returns error if creating data dir fails", func() {
+					fs.MkdirAllError = errors.New("fake-mkdir-all-err")
+
+					err := act()
+					Expect(err).To(HaveOccurred())
+					Expect(err.Error()).To(ContainSubstring("fake-mkdir-all-err"))
+					Expect(partitioner.PartitionCalled).To(BeFalse())
+					Expect(formatter.FormatCalled).To(BeFalse())
+					Expect(mounter.MountCalled).To(BeFalse())
+				})
+
+				It("returns err when the data directory cannot be globbed", func() {
+					fs.GlobErr = errors.New("fake-glob-err")
+
+					err := act()
+					Expect(err).To(HaveOccurred())
+					Expect(err.Error()).To(ContainSubstring("Globbing ephemeral disk mount point `/fake-dir/data/*'"))
+					Expect(err.Error()).To(ContainSubstring("fake-glob-err"))
+					Expect(partitioner.PartitionCalled).To(BeFalse())
+					Expect(formatter.FormatCalled).To(BeFalse())
+					Expect(mounter.MountCalled).To(BeFalse())
+				})
 			})
 
 			Context("when agent should not partition ephemeral disk on root disk", func() {
@@ -675,21 +666,27 @@ fake-base-path/data/sys/log/*.log fake-base-path/data/sys/log/*/*.log fake-base-
 					options.CreatePartitionIfNoEphemeralDisk = false
 				})
 
+				It("returns an error", func() {
+					err := act()
+					Expect(err).To(HaveOccurred())
+					Expect(err.Error()).To(ContainSubstring("cannot use root partition as ephemeral disk"))
+				})
+
 				It("does not try to partition anything", func() {
 					err := act()
-					Expect(err).NotTo(HaveOccurred())
+					Expect(err).To(HaveOccurred())
 					Expect(partitioner.PartitionCalled).To(BeFalse())
 				})
 
 				It("does not try to format anything", func() {
 					err := act()
-					Expect(err).NotTo(HaveOccurred())
+					Expect(err).To(HaveOccurred())
 					Expect(formatter.FormatCalled).To(BeFalse())
 				})
 
 				It("does not try to mount anything", func() {
 					err := act()
-					Expect(err).NotTo(HaveOccurred())
+					Expect(err).To(HaveOccurred())
 					Expect(mounter.MountCalled).To(BeFalse())
 				})
 			})
@@ -717,6 +714,16 @@ fake-base-path/data/sys/log/*.log fake-base-path/data/sys/log/*/*.log fake-base-
 				Expect(sysLogStats.FileMode).To(Equal(os.FileMode(0750)))
 				Expect(cmdRunner.RunCommands[0]).To(Equal([]string{"chown", "root:vcap", "/fake-dir/data/sys"}))
 				Expect(cmdRunner.RunCommands[1]).To(Equal([]string{"chown", "root:vcap", "/fake-dir/data/sys/log"}))
+			})
+
+			It("creates symlink from sys to data/sys", func() {
+				err := platform.SetupDataDir()
+				Expect(err).NotTo(HaveOccurred())
+
+				sysStats := fs.GetFileTestStat("/fake-dir/sys")
+				Expect(sysStats).ToNot(BeNil())
+				Expect(sysStats.FileType).To(Equal(fakesys.FakeFileTypeSymlink))
+				Expect(sysStats.SymlinkTarget).To(Equal("/fake-dir/data/sys"))
 			})
 
 			It("does not create new sys/run dir", func() {
@@ -749,6 +756,16 @@ fake-base-path/data/sys/log/*.log fake-base-path/data/sys/log/*/*.log fake-base-
 				Expect(sysLogStats.FileMode).To(Equal(os.FileMode(0750)))
 				Expect(cmdRunner.RunCommands[0]).To(Equal([]string{"chown", "root:vcap", "/fake-dir/data/sys"}))
 				Expect(cmdRunner.RunCommands[1]).To(Equal([]string{"chown", "root:vcap", "/fake-dir/data/sys/log"}))
+			})
+
+			It("creates symlink from sys to data/sys", func() {
+				err := platform.SetupDataDir()
+				Expect(err).NotTo(HaveOccurred())
+
+				sysStats := fs.GetFileTestStat("/fake-dir/sys")
+				Expect(sysStats).ToNot(BeNil())
+				Expect(sysStats.FileType).To(Equal(fakesys.FakeFileTypeSymlink))
+				Expect(sysStats.SymlinkTarget).To(Equal("/fake-dir/data/sys"))
 			})
 
 			It("creates new sys/run dir", func() {
@@ -1191,11 +1208,23 @@ fake-base-path/data/sys/log/*.log fake-base-path/data/sys/log/*/*.log fake-base-
 		})
 	})
 
-	Describe("NormalizeDiskPath", func() {
+	Describe("GetEphemeralDiskPath", func() {
+		Context("when device path is an empty string", func() {
+			It("returns an empty string", func() {
+				devicePathResolver.RealDevicePath = "non-desired-device-path"
+				diskSettings := boshsettings.DiskSettings{
+					ID:       "fake-id",
+					VolumeID: "fake-volume-id",
+					Path:     "",
+				}
+				Expect(platform.GetEphemeralDiskPath(diskSettings)).To(BeEmpty())
+			})
+		})
+
 		Context("when real device path was resolved without an error", func() {
 			It("returns real device path and true", func() {
 				devicePathResolver.RealDevicePath = "fake-real-device-path"
-				realPath := platform.NormalizeDiskPath(boshsettings.DiskSettings{Path: "fake-device-path"})
+				realPath := platform.GetEphemeralDiskPath(boshsettings.DiskSettings{Path: "fake-device-path"})
 				Expect(realPath).To(Equal("fake-real-device-path"))
 			})
 		})
@@ -1203,7 +1232,7 @@ fake-base-path/data/sys/log/*.log fake-base-path/data/sys/log/*/*.log fake-base-
 		Context("when real device path was not resolved without an error", func() {
 			It("returns real device path and true", func() {
 				devicePathResolver.GetRealDevicePathErr = errors.New("fake-get-real-device-path-err")
-				realPath := platform.NormalizeDiskPath(boshsettings.DiskSettings{Path: "fake-device-path"})
+				realPath := platform.GetEphemeralDiskPath(boshsettings.DiskSettings{Path: "fake-device-path"})
 				Expect(realPath).To(Equal(""))
 			})
 		})
@@ -1329,11 +1358,18 @@ fake-base-path/data/sys/log/*.log fake-base-path/data/sys/log/*/*.log fake-base-
 			Expect(target).To(Equal(filepath.Join("/etc", "sv", "monit")))
 		})
 
-		It("starts monit", func() {
+		It("retries to start monit", func() {
 			err := platform.StartMonit()
 			Expect(err).NotTo(HaveOccurred())
-			Expect(len(cmdRunner.RunCommands)).To(Equal(1))
-			Expect(cmdRunner.RunCommands[0]).To(Equal([]string{"sv", "start", "monit"}))
+			Expect(monitRetryStrategy.TryCalled).To(BeTrue())
+		})
+
+		It("returns error if retrying to start monit fails", func() {
+			monitRetryStrategy.TryErr = errors.New("fake-retry-monit-error")
+
+			err := platform.StartMonit()
+			Expect(err).To(HaveOccurred())
+			Expect(err.Error()).To(ContainSubstring("fake-retry-monit-error"))
 		})
 	})
 
@@ -1407,22 +1443,37 @@ fake-base-path/data/sys/log/*.log fake-base-path/data/sys/log/*/*.log fake-base-
 		})
 	})
 
+	Describe("SetupNetworking", func() {
+		It("delegates to the NetManager", func() {
+			networks := boshsettings.Networks{}
+
+			err := platform.SetupNetworking(networks)
+			Expect(err).ToNot(HaveOccurred())
+
+			Expect(netManager.SetupNetworkingNetworks).To(Equal(networks))
+		})
+	})
+
+	Describe("GetConfiguredNetworkInterfaces", func() {
+		It("delegates to the NetManager", func() {
+			netmanagerInterfaces := []string{"fake-eth0", "fake-eth1"}
+			netManager.GetConfiguredNetworkInterfacesInterfaces = netmanagerInterfaces
+
+			interfaces, err := platform.GetConfiguredNetworkInterfaces()
+			Expect(err).ToNot(HaveOccurred())
+			Expect(interfaces).To(Equal(netmanagerInterfaces))
+		})
+	})
+
 	Describe("GetDefaultNetwork", func() {
-		It("returns default network according to net manager", func() {
-			netManager.GetDefaultNetworkNetwork = boshsettings.Network{IP: "fake-ip"}
+		It("delegates to the defaultNetworkResolver", func() {
+			defaultNetwork := boshsettings.Network{IP: "1.2.3.4"}
+			fakeDefaultNetworkResolver.GetDefaultNetworkNetwork = defaultNetwork
 
 			network, err := platform.GetDefaultNetwork()
 			Expect(err).ToNot(HaveOccurred())
-			Expect(network).To(Equal(boshsettings.Network{IP: "fake-ip"}))
-		})
 
-		It("returns error if net manager fails to retrieve default network", func() {
-			netManager.GetDefaultNetworkErr = errors.New("fake-get-default-network-err")
-
-			network, err := platform.GetDefaultNetwork()
-			Expect(err).To(HaveOccurred())
-			Expect(err.Error()).To(ContainSubstring("fake-get-default-network-err"))
-			Expect(network).To(Equal(boshsettings.Network{}))
+			Expect(network).To(Equal(defaultNetwork))
 		})
 	})
-})
+}

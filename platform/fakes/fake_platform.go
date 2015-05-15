@@ -1,6 +1,8 @@
 package fakes
 
 import (
+	"path/filepath"
+
 	boshdpresolv "github.com/cloudfoundry/bosh-agent/infrastructure/devicepathresolver"
 	fakedpresolv "github.com/cloudfoundry/bosh-agent/infrastructure/devicepathresolver/fakes"
 	boshlog "github.com/cloudfoundry/bosh-agent/logger"
@@ -53,10 +55,9 @@ type FakePlatform struct {
 	SetupTmpDirCalled bool
 	SetupTmpDirErr    error
 
-	SetupManualNetworkingNetworks boshsettings.Networks
-
-	SetupDhcpNetworks boshsettings.Networks
-	SetupDhcpErr      error
+	SetupNetworkingCalled   bool
+	SetupNetworkingNetworks boshsettings.Networks
+	SetupNetworkingErr      error
 
 	MountPersistentDiskCalled     bool
 	MountPersistentDiskSettings   boshsettings.DiskSettings
@@ -66,17 +67,20 @@ type FakePlatform struct {
 	UnmountPersistentDiskDidUnmount bool
 	UnmountPersistentDiskSettings   boshsettings.DiskSettings
 
-	GetFileContentsFromCDROMPath     string
-	GetFileContentsFromCDROMContents []byte
+	GetFileContentsFromCDROMPath        string
+	GetFileContentsFromCDROMContents    []byte
+	GetFileContentsFromCDROMErr         error
+	GetFileContentsFromCDROMCalledTimes int
 
-	GetFileContentsFromDiskDiskPaths []string
-	GetFileContentsFromDiskFileNames [][]string
-	GetFileContentsFromDiskContents  map[string][]byte
-	GetFileContentsFromDiskErrs      map[string]error
+	GetFileContentsFromDiskDiskPaths   []string
+	GetFileContentsFromDiskFileNames   [][]string
+	GetFileContentsFromDiskContents    map[string][]byte
+	GetFileContentsFromDiskErrs        map[string]error
+	GetFileContentsFromDiskCalledTimes int
 
-	NormalizeDiskPathCalled   bool
-	NormalizeDiskPathSettings boshsettings.DiskSettings
-	NormalizeDiskPathRealPath string
+	GetEphemeralDiskPathCalled   bool
+	GetEphemeralDiskPathSettings boshsettings.DiskSettings
+	GetEphemeralDiskPathRealPath string
 
 	ScsiDiskMap map[string]string
 
@@ -97,9 +101,11 @@ type FakePlatform struct {
 	PrepareForNetworkingChangeCalled bool
 	PrepareForNetworkingChangeErr    error
 
-	GetDefaultNetworkCalled  bool
 	GetDefaultNetworkNetwork boshsettings.Network
 	GetDefaultNetworkErr     error
+
+	GetConfiguredNetworkInterfacesInterfaces []string
+	GetConfiguredNetworkInterfacesErr        error
 }
 
 func NewFakePlatform() (platform *FakePlatform) {
@@ -149,11 +155,6 @@ func (p *FakePlatform) GetDevicePathResolver() (devicePathResolver boshdpresolv.
 	return p.DevicePathResolver
 }
 
-func (p *FakePlatform) SetDevicePathResolver(devicePathResolver boshdpresolv.DevicePathResolver) (err error) {
-	p.DevicePathResolver = devicePathResolver
-	return
-}
-
 func (p *FakePlatform) SetupRuntimeConfiguration() (err error) {
 	p.SetupRuntimeConfigurationWasInvoked = true
 	return
@@ -194,14 +195,14 @@ func (p *FakePlatform) SetupHostname(hostname string) (err error) {
 	return
 }
 
-func (p *FakePlatform) SetupDhcp(networks boshsettings.Networks) (err error) {
-	p.SetupDhcpNetworks = networks
-	return p.SetupDhcpErr
+func (p *FakePlatform) SetupNetworking(networks boshsettings.Networks) error {
+	p.SetupNetworkingCalled = true
+	p.SetupNetworkingNetworks = networks
+	return p.SetupNetworkingErr
 }
 
-func (p *FakePlatform) SetupManualNetworking(networks boshsettings.Networks) (err error) {
-	p.SetupManualNetworkingNetworks = networks
-	return
+func (p *FakePlatform) GetConfiguredNetworkInterfaces() ([]string, error) {
+	return p.GetConfiguredNetworkInterfacesInterfaces, p.GetConfiguredNetworkInterfacesErr
 }
 
 func (p *FakePlatform) SetupLogrotate(groupName, basePath, size string) (err error) {
@@ -241,30 +242,33 @@ func (p *FakePlatform) UnmountPersistentDisk(diskSettings boshsettings.DiskSetti
 	return
 }
 
-func (p *FakePlatform) NormalizeDiskPath(diskSettings boshsettings.DiskSettings) string {
-	p.NormalizeDiskPathCalled = true
-	p.NormalizeDiskPathSettings = diskSettings
-	return p.NormalizeDiskPathRealPath
+func (p *FakePlatform) GetEphemeralDiskPath(diskSettings boshsettings.DiskSettings) string {
+	p.GetEphemeralDiskPathCalled = true
+	p.GetEphemeralDiskPathSettings = diskSettings
+	return p.GetEphemeralDiskPathRealPath
 }
 
-func (p *FakePlatform) GetFileContentsFromCDROM(path string) (contents []byte, err error) {
+func (p *FakePlatform) GetFileContentsFromCDROM(path string) ([]byte, error) {
+	p.GetFileContentsFromCDROMCalledTimes++
 	p.GetFileContentsFromCDROMPath = path
-	contents = p.GetFileContentsFromCDROMContents
-	return
+	return p.GetFileContentsFromCDROMContents, p.GetFileContentsFromCDROMErr
 }
 
 func (p *FakePlatform) GetFilesContentsFromDisk(diskPath string, fileNames []string) ([][]byte, error) {
+	p.GetFileContentsFromDiskCalledTimes++
+
 	p.GetFileContentsFromDiskDiskPaths = append(p.GetFileContentsFromDiskDiskPaths, diskPath)
 	p.GetFileContentsFromDiskFileNames = append(p.GetFileContentsFromDiskFileNames, fileNames)
 
 	result := [][]byte{}
 	for _, fileName := range fileNames {
-		err := p.GetFileContentsFromDiskErrs[fileName]
+		fileDiskPath := filepath.Join(diskPath, fileName)
+		err := p.GetFileContentsFromDiskErrs[fileDiskPath]
 		if err != nil {
 			return [][]byte{}, err
 		}
 
-		result = append(result, p.GetFileContentsFromDiskContents[fileName])
+		result = append(result, p.GetFileContentsFromDiskContents[fileDiskPath])
 	}
 
 	return result, nil
@@ -317,6 +321,5 @@ func (p *FakePlatform) PrepareForNetworkingChange() error {
 }
 
 func (p *FakePlatform) GetDefaultNetwork() (boshsettings.Network, error) {
-	p.GetDefaultNetworkCalled = true
 	return p.GetDefaultNetworkNetwork, p.GetDefaultNetworkErr
 }

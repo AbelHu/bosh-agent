@@ -1,8 +1,8 @@
 {
 	"ImportPath": "github.com/cloudfoundry/bosh-agent",
-	"GoVersion": "go1.2.2",
+	"GoVersion": "go1.3.3",
 	"Packages": [
-		"github.com/cloudfoundry/bosh-agent/..."
+		"./..."
 	],
 	"Deps": [
 		{
@@ -16,13 +16,17 @@
 			"Rev": "ebbeafdc430eb6c7e44e9a730a38eaff4c56ba3a"
 		},
 		{
+			"ImportPath": "github.com/cloudfoundry/bosh-init/registry",
+			"Rev": "2ce54328c68c5af01d3cdfae5a352d9b5b2a4f1c"
+		},
+		{
 			"ImportPath": "github.com/cloudfoundry/gofileutils/glob",
 			"Rev": "a4a0cae5ff8a342ba01fce700b9e41c6942c0e5e"
 		},
 		{
 			"ImportPath": "github.com/cloudfoundry/gosigar",
-			"Comment": "scotty_09012012-23-gacc4d26",
-			"Rev": "acc4d267f2f48a898e2ce37091f1b66ff767b99b"
+			"Comment": "scotty_09012012-27-g3ed7c74",
+			"Rev": "3ed7c74352dae6dc00bdc8c74045375352e3ec05"
 		},
 		{
 			"ImportPath": "github.com/cloudfoundry/yagnats",
@@ -33,17 +37,22 @@
 			"Rev": "812866d0389ae7e1f5a0110d47dea20224fc776f"
 		},
 		{
+			"ImportPath": "github.com/mitchellh/mapstructure",
+			"Rev": "442e588f213303bec7936deba67901f8fc8f18b1"
+		},
+		{
 			"ImportPath": "github.com/nu7hatch/gouuid",
 			"Rev": "179d4d0c4d8d407a32af483c2354df1d2c91e6c3"
 		},
 		{
 			"ImportPath": "github.com/onsi/ginkgo",
-			"Comment": "v1.0.0-26-g34294d5",
-			"Rev": "34294d53b098180c6e983307c0439a6b30a16b43"
+			"Comment": "v1.1.0-41-g38caab9",
+			"Rev": "38caab951a9ff39f0e61294a1dbaaa074a39228b"
 		},
 		{
 			"ImportPath": "github.com/onsi/gomega",
-			"Rev": "28e5ce936abc528d8c6b5eb3dd5689e7e81e9272"
+			"Comment": "v1.0-33-ge7b2cd9",
+			"Rev": "e7b2cd96b5633fbc5f0c221159a5c1e85323f770"
 		},
 		{
 			"ImportPath": "github.com/pivotal/go-smtpd/smtpd",

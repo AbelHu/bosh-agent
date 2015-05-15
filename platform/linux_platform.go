@@ -20,6 +20,7 @@ import (
 	boshnet "github.com/cloudfoundry/bosh-agent/platform/net"
 	boshstats "github.com/cloudfoundry/bosh-agent/platform/stats"
 	boshvitals "github.com/cloudfoundry/bosh-agent/platform/vitals"
+	boshretry "github.com/cloudfoundry/bosh-agent/retrystrategy"
 	boshsettings "github.com/cloudfoundry/bosh-agent/settings"
 	boshdir "github.com/cloudfoundry/bosh-agent/settings/directories"
 	boshdirs "github.com/cloudfoundry/bosh-agent/settings/directories"
@@ -57,23 +58,29 @@ type LinuxOptions struct {
 	// a partition on the same device as the root partition to use as the
 	// ephemeral disk
 	CreatePartitionIfNoEphemeralDisk bool
+
+	// Strategy for resolving device paths;
+	// possible values: virtio, scsi, ''
+	DevicePathResolutionType string
 }
 
 type linux struct {
-	fs                 boshsys.FileSystem
-	cmdRunner          boshsys.CmdRunner
-	collector          boshstats.Collector
-	compressor         boshcmd.Compressor
-	copier             boshcmd.Copier
-	dirProvider        boshdirs.Provider
-	vitalsService      boshvitals.Service
-	cdutil             boshdevutil.DeviceUtil
-	diskManager        boshdisk.Manager
-	netManager         boshnet.Manager
-	diskScanDuration   time.Duration
-	devicePathResolver boshdpresolv.DevicePathResolver
-	options            LinuxOptions
-	logger             boshlog.Logger
+	fs                     boshsys.FileSystem
+	cmdRunner              boshsys.CmdRunner
+	collector              boshstats.Collector
+	compressor             boshcmd.Compressor
+	copier                 boshcmd.Copier
+	dirProvider            boshdirs.Provider
+	vitalsService          boshvitals.Service
+	cdutil                 boshdevutil.DeviceUtil
+	diskManager            boshdisk.Manager
+	netManager             boshnet.Manager
+	monitRetryStrategy     boshretry.RetryStrategy
+	devicePathResolver     boshdpresolv.DevicePathResolver
+	diskScanDuration       time.Duration
+	options                LinuxOptions
+	logger                 boshlog.Logger
+	defaultNetworkResolver boshsettings.DefaultNetworkResolver
 }
 
 func NewLinuxPlatform(
@@ -87,26 +94,31 @@ func NewLinuxPlatform(
 	cdutil boshdevutil.DeviceUtil,
 	diskManager boshdisk.Manager,
 	netManager boshnet.Manager,
+	monitRetryStrategy boshretry.RetryStrategy,
+	devicePathResolver boshdpresolv.DevicePathResolver,
 	diskScanDuration time.Duration,
 	options LinuxOptions,
 	logger boshlog.Logger,
-) (platform *linux) {
-	platform = &linux{
-		fs:               fs,
-		cmdRunner:        cmdRunner,
-		collector:        collector,
-		compressor:       compressor,
-		copier:           copier,
-		dirProvider:      dirProvider,
-		vitalsService:    vitalsService,
-		cdutil:           cdutil,
-		diskManager:      diskManager,
-		netManager:       netManager,
-		diskScanDuration: diskScanDuration,
-		options:          options,
-		logger:           logger,
+	defaultNetworkResolver boshsettings.DefaultNetworkResolver,
+) Platform {
+	return &linux{
+		fs:                     fs,
+		cmdRunner:              cmdRunner,
+		collector:              collector,
+		compressor:             compressor,
+		copier:                 copier,
+		dirProvider:            dirProvider,
+		vitalsService:          vitalsService,
+		cdutil:                 cdutil,
+		diskManager:            diskManager,
+		netManager:             netManager,
+		monitRetryStrategy:     monitRetryStrategy,
+		devicePathResolver:     devicePathResolver,
+		diskScanDuration:       diskScanDuration,
+		options:                options,
+		logger:                 logger,
+		defaultNetworkResolver: defaultNetworkResolver,
 	}
-	return
 }
 
 const logTag = "linuxPlatform"
@@ -152,17 +164,12 @@ func (p linux) GetDevicePathResolver() (devicePathResolver boshdpresolv.DevicePa
 	return p.devicePathResolver
 }
 
-func (p *linux) SetDevicePathResolver(devicePathResolver boshdpresolv.DevicePathResolver) (err error) {
-	p.devicePathResolver = devicePathResolver
-	return
+func (p linux) SetupNetworking(networks boshsettings.Networks) (err error) {
+	return p.netManager.SetupNetworking(networks, nil)
 }
 
-func (p linux) SetupManualNetworking(networks boshsettings.Networks) (err error) {
-	return p.netManager.SetupManualNetworking(networks, nil)
-}
-
-func (p linux) SetupDhcp(networks boshsettings.Networks) (err error) {
-	return p.netManager.SetupDhcp(networks, nil)
+func (p linux) GetConfiguredNetworkInterfaces() ([]string, error) {
+	return p.netManager.GetConfiguredNetworkInterfaces()
 }
 
 func (p linux) SetupRuntimeConfiguration() (err error) {
@@ -382,7 +389,13 @@ func (p linux) SetupEphemeralDiskWithPath(realPath string) error {
 	if err != nil {
 		return bosherr.WrapErrorf(err, "Globbing ephemeral disk mount point `%s'", mountPointGlob)
 	}
+
 	if contents != nil && len(contents) > 0 {
+		// When agent bootstraps for the first time data directory should be empty.
+		// It might be non-empty on subsequent agent restarts. The ephemeral disk setup
+		// should be idempotent and partitioning will be skipped if disk is already
+		// partitioned as needed. If disk is not partitioned as needed we still want to
+		// partition it even if data directory is not empty.
 		p.logger.Debug(logTag, "Existing ephemeral mount `%s' is not empty. Contents: %s", mountPoint, contents)
 	}
 
@@ -393,20 +406,18 @@ func (p linux) SetupEphemeralDiskWithPath(realPath string) error {
 
 	var swapPartitionPath, dataPartitionPath string
 
+	// Agent can only setup ephemeral data directory either on ephemeral device
+	// or on separate root partition.
+	// The real path can be empty if CPI did not provide ephemeral disk
+	// or if the provided disk was not found.
 	if realPath == "" {
 		if !p.options.CreatePartitionIfNoEphemeralDisk {
-			p.logger.Info(logTag, "No ephemeral disk found, using root partition as ephemeral disk")
-			return nil
+			// Agent can not use root partition for ephemeral data directory.
+			return bosherr.Error("No ephemeral disk found, cannot use root partition as ephemeral disk")
 		}
 
 		swapPartitionPath, dataPartitionPath, err = p.createEphemeralPartitionsOnRootDevice()
 		if err != nil {
-			_, isInsufficentSpaceError := err.(insufficientSpaceError)
-			if isInsufficentSpaceError {
-				p.logger.Warn(logTag, "No partitions created on root device, using root partition as ephemeral disk - %s", err.Error())
-				return nil
-			}
-
 			return bosherr.WrapError(err, "Creating ephemeral partitions on root device")
 		}
 	} else {
@@ -446,17 +457,17 @@ func (p linux) SetupEphemeralDiskWithPath(realPath string) error {
 func (p linux) SetupDataDir() error {
 	dataDir := p.dirProvider.DataDir()
 
-	sysDir := filepath.Join(dataDir, "sys")
+	sysDataDir := filepath.Join(dataDir, "sys")
 
-	logDir := filepath.Join(sysDir, "log")
+	logDir := filepath.Join(sysDataDir, "log")
 	err := p.fs.MkdirAll(logDir, logDirPermissions)
 	if err != nil {
 		return bosherr.WrapErrorf(err, "Making %s dir", logDir)
 	}
 
-	_, _, _, err = p.cmdRunner.RunCommand("chown", "root:vcap", sysDir)
+	_, _, _, err = p.cmdRunner.RunCommand("chown", "root:vcap", sysDataDir)
 	if err != nil {
-		return bosherr.WrapErrorf(err, "chown %s", sysDir)
+		return bosherr.WrapErrorf(err, "chown %s", sysDataDir)
 	}
 
 	_, _, _, err = p.cmdRunner.RunCommand("chown", "root:vcap", logDir)
@@ -464,9 +475,15 @@ func (p linux) SetupDataDir() error {
 		return bosherr.WrapErrorf(err, "chown %s", logDir)
 	}
 
-	err = p.setupRunDir(sysDir)
+	err = p.setupRunDir(sysDataDir)
 	if err != nil {
 		return err
+	}
+
+	sysDir := filepath.Join(filepath.Dir(dataDir), "sys")
+	err = p.fs.Symlink(sysDataDir, sysDir)
+	if err != nil {
+		return bosherr.WrapErrorf(err, "Symlinking '%s' to '%s'", sysDir, sysDataDir)
 	}
 
 	return nil
@@ -640,7 +657,11 @@ func (p linux) UnmountPersistentDisk(diskSettings boshsettings.DiskSettings) (bo
 	return p.diskManager.GetMounter().Unmount(realPath)
 }
 
-func (p linux) NormalizeDiskPath(diskSettings boshsettings.DiskSettings) string {
+func (p linux) GetEphemeralDiskPath(diskSettings boshsettings.DiskSettings) string {
+	if len(diskSettings.Path) == 0 {
+		return ""
+	}
+
 	realPath, _, err := p.devicePathResolver.GetRealDevicePath(diskSettings)
 	if err != nil {
 		return ""
@@ -708,9 +729,9 @@ func (p linux) StartMonit() error {
 		return bosherr.WrapError(err, "Symlinking /etc/service/monit to /etc/sv/monit")
 	}
 
-	_, _, _, err = p.cmdRunner.RunCommand("sv", "start", "monit")
+	err = p.monitRetryStrategy.Try()
 	if err != nil {
-		return bosherr.WrapError(err, "Shelling out to sv")
+		return bosherr.WrapError(err, "Retrying to start monit")
 	}
 
 	return nil
@@ -757,7 +778,7 @@ func (p linux) PrepareForNetworkingChange() error {
 }
 
 func (p linux) GetDefaultNetwork() (boshsettings.Network, error) {
-	return p.netManager.GetDefaultNetwork()
+	return p.defaultNetworkResolver.GetDefaultNetwork()
 }
 
 func (p linux) calculateEphemeralDiskPartitionSizes(diskSizeInBytes uint64) (uint64, uint64, error) {
@@ -843,6 +864,7 @@ func (p linux) createEphemeralPartitionsOnRootDevice() (string, string, error) {
 	for _, partition := range partitions {
 		p.logger.Info(logTag, "Partitioning root device `%s': %s", rootDevicePath, partition)
 	}
+
 	err = p.diskManager.GetRootDevicePartitioner().Partition(rootDevicePath, partitions)
 	if err != nil {
 		return "", "", bosherr.WrapErrorf(err, "Partitioning root device `%s'", rootDevicePath)

@@ -4,6 +4,8 @@ import (
 	"path/filepath"
 	"time"
 
+	sigar "github.com/cloudfoundry/gosigar"
+
 	boshagent "github.com/cloudfoundry/bosh-agent/agent"
 	boshaction "github.com/cloudfoundry/bosh-agent/agent/action"
 	boshapplier "github.com/cloudfoundry/bosh-agent/agent/applier"
@@ -16,7 +18,6 @@ import (
 	boshdrain "github.com/cloudfoundry/bosh-agent/agent/drain"
 	boshtask "github.com/cloudfoundry/bosh-agent/agent/task"
 	boshblob "github.com/cloudfoundry/bosh-agent/blobstore"
-	boshboot "github.com/cloudfoundry/bosh-agent/bootstrap"
 	bosherr "github.com/cloudfoundry/bosh-agent/errors"
 	boshinf "github.com/cloudfoundry/bosh-agent/infrastructure"
 	boshjobsuper "github.com/cloudfoundry/bosh-agent/jobsupervisor"
@@ -27,21 +28,27 @@ import (
 	boshplatform "github.com/cloudfoundry/bosh-agent/platform"
 	boshsettings "github.com/cloudfoundry/bosh-agent/settings"
 	boshdirs "github.com/cloudfoundry/bosh-agent/settings/directories"
+	boshsigar "github.com/cloudfoundry/bosh-agent/sigar"
 	boshsyslog "github.com/cloudfoundry/bosh-agent/syslog"
 	boshsys "github.com/cloudfoundry/bosh-agent/system"
 	boshtime "github.com/cloudfoundry/bosh-agent/time"
 	boshuuid "github.com/cloudfoundry/bosh-agent/uuid"
 )
 
-type app struct {
-	logger         boshlog.Logger
-	agent          boshagent.Agent
-	platform       boshplatform.Platform
-	infrastructure boshinf.Infrastructure
+type App interface {
+	Setup(args []string) error
+	Run() error
+	GetPlatform() boshplatform.Platform
 }
 
-func New(logger boshlog.Logger) app {
-	return app{logger: logger}
+type app struct {
+	logger   boshlog.Logger
+	agent    boshagent.Agent
+	platform boshplatform.Platform
+}
+
+func New(logger boshlog.Logger) App {
+	return &app{logger: logger}
 }
 
 func (app *app) Setup(args []string) error {
@@ -57,34 +64,37 @@ func (app *app) Setup(args []string) error {
 
 	dirProvider := boshdirs.NewProvider(opts.BaseDirectory)
 
-	platformProvider := boshplatform.NewProvider(app.logger, dirProvider, config.Platform)
+	// Pulled outside of the platform provider so bosh-init will not pull in
+	// sigar when cross compiling linux -> darwin
+	sigarCollector := boshsigar.NewSigarStatsCollector(&sigar.ConcreteSigar{})
 
+	platformProvider := boshplatform.NewProvider(app.logger, dirProvider, sigarCollector, config.Platform)
 	app.platform, err = platformProvider.Get(opts.PlatformName)
 	if err != nil {
 		return bosherr.WrapError(err, "Getting platform")
 	}
 
-	infProvider := boshinf.NewProvider(app.logger, app.platform, config.Infrastructure)
-	app.infrastructure, err = infProvider.Get(opts.InfrastructureName)
-
-	app.platform.SetDevicePathResolver(app.infrastructure.GetDevicePathResolver())
-
+	settingsSourceFactory := boshinf.NewSettingsSourceFactory(config.Infrastructure.Settings, app.platform, app.logger)
+	settingsSource, err := settingsSourceFactory.New()
 	if err != nil {
-		return bosherr.WrapError(err, "Getting infrastructure")
+		return bosherr.WrapError(err, "Getting Settings Source")
 	}
 
-	settingsServiceProvider := boshsettings.NewServiceProvider()
-
-	boot := boshboot.New(
-		app.infrastructure,
+	settingsService := boshsettings.NewService(
+		app.platform.GetFs(),
+		filepath.Join(dirProvider.BoshDir(), "settings.json"),
+		settingsSource,
+		app.platform,
+		app.logger,
+	)
+	boot := boshagent.NewBootstrap(
 		app.platform,
 		dirProvider,
-		settingsServiceProvider,
+		settingsService,
 		app.logger,
 	)
 
-	settingsService, err := boot.Run()
-	if err != nil {
+	if err = boot.Run(); err != nil {
 		return bosherr.WrapError(err, "Running bootstrap")
 	}
 
@@ -102,8 +112,7 @@ func (app *app) Setup(args []string) error {
 		return bosherr.WrapError(err, "Getting blobstore")
 	}
 
-	timeService := boshtime.NewConcreteService()
-	monitClientProvider := boshmonit.NewProvider(app.platform, app.logger, timeService)
+	monitClientProvider := boshmonit.NewProvider(app.platform, app.logger)
 
 	monitClient, err := monitClientProvider.Get()
 	if err != nil {
@@ -175,6 +184,8 @@ func (app *app) Setup(args []string) error {
 
 	syslogServer := boshsyslog.NewServer(33331, app.logger)
 
+	timeService := boshtime.NewConcreteService()
+
 	app.agent = boshagent.New(
 		app.logger,
 		mbusHandler,
@@ -202,10 +213,6 @@ func (app *app) Run() error {
 
 func (app *app) GetPlatform() boshplatform.Platform {
 	return app.platform
-}
-
-func (app *app) GetInfrastructure() boshinf.Infrastructure {
-	return app.infrastructure
 }
 
 func (app *app) buildApplierAndCompiler(

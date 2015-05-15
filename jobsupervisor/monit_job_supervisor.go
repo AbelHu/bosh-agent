@@ -49,7 +49,7 @@ func NewMonitJobSupervisor(
 	dirProvider boshdir.Provider,
 	jobFailuresServerPort int,
 	reloadOptions MonitReloadOptions,
-) (m monitJobSupervisor) {
+) JobSupervisor {
 	return monitJobSupervisor{
 		fs:          fs,
 		runner:      runner,
@@ -222,7 +222,7 @@ func (m monitJobSupervisor) MonitorJobFailures(handler JobFailureHandler) (err e
 	}
 
 	serv := &smtpd.Server{
-		Addr:      fmt.Sprintf(":%d", m.jobFailuresServerPort),
+		Addr:      fmt.Sprintf("127.0.0.1:%d", m.jobFailuresServerPort),
 		OnNewMail: alertHandler,
 	}
 

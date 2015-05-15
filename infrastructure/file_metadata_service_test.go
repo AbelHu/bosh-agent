@@ -4,11 +4,10 @@ import (
 	. "github.com/onsi/ginkgo"
 	. "github.com/onsi/gomega"
 
-	fakesys "github.com/cloudfoundry/bosh-agent/system/fakes"
-
-	boshlog "github.com/cloudfoundry/bosh-agent/logger"
-
 	. "github.com/cloudfoundry/bosh-agent/infrastructure"
+	boshlog "github.com/cloudfoundry/bosh-agent/logger"
+	boshsettings "github.com/cloudfoundry/bosh-agent/settings"
+	fakesys "github.com/cloudfoundry/bosh-agent/system/fakes"
 )
 
 var _ = Describe("FileMetadataService", func() {
@@ -20,7 +19,13 @@ var _ = Describe("FileMetadataService", func() {
 	BeforeEach(func() {
 		fs = fakesys.NewFakeFileSystem()
 		logger := boshlog.NewLogger(boshlog.LevelNone)
-		metadataService = NewFileMetadataService("fake-userdata-file-path", "fake-metadata-file-path", fs, logger)
+		metadataService = NewFileMetadataService(
+			"fake-metadata-file-path",
+			"fake-userdata-file-path",
+			"fake-settings-file-path",
+			fs,
+			logger,
+		)
 	})
 
 	Describe("GetInstanceID", func() {
@@ -45,6 +50,55 @@ var _ = Describe("FileMetadataService", func() {
 		})
 	})
 
+	Describe("GetNetworks", func() {
+		It("returns the network settings", func() {
+			userDataContents := `
+				{
+					"networks": {
+						"network_1": {"type": "manual", "ip": "1.2.3.4", "netmask": "2.3.4.5", "gateway": "3.4.5.6", "default": ["dns"], "dns": ["8.8.8.8"], "mac": "fake-mac-address-1"},
+						"network_2": {"type": "dynamic", "default": ["dns"], "dns": ["8.8.8.8"], "mac": "fake-mac-address-2"}
+					}
+				}`
+			fs.WriteFileString("fake-userdata-file-path", userDataContents)
+
+			networks, err := metadataService.GetNetworks()
+			Expect(err).ToNot(HaveOccurred())
+			Expect(networks).To(Equal(boshsettings.Networks{
+				"network_1": boshsettings.Network{
+					Type:    "manual",
+					IP:      "1.2.3.4",
+					Netmask: "2.3.4.5",
+					Gateway: "3.4.5.6",
+					Default: []string{"dns"},
+					DNS:     []string{"8.8.8.8"},
+					Mac:     "fake-mac-address-1",
+				},
+				"network_2": boshsettings.Network{
+					Type:    "dynamic",
+					Default: []string{"dns"},
+					DNS:     []string{"8.8.8.8"},
+					Mac:     "fake-mac-address-2",
+				},
+			}))
+		})
+
+		It("returns a nil Networks if the settings are missing (from an old CPI version)", func() {
+			userDataContents := `{}`
+			fs.WriteFileString("fake-userdata-file-path", userDataContents)
+
+			networks, err := metadataService.GetNetworks()
+			Expect(err).ToNot(HaveOccurred())
+			Expect(networks).To(BeNil())
+		})
+
+		It("raises an error if we can't read the file", func() {
+			networks, err := metadataService.GetNetworks()
+			Expect(err).To(HaveOccurred())
+			Expect(err.Error()).To(ContainSubstring("Reading user data: File not found"))
+			Expect(networks).To(BeNil())
+		})
+	})
+
 	Describe("GetRegistryEndpoint", func() {
 		Context("when metadata service file exists", func() {
 			BeforeEach(func() {
@@ -60,9 +114,10 @@ var _ = Describe("FileMetadataService", func() {
 		})
 
 		Context("when metadata service file does not exist", func() {
-			It("returns an error", func() {
-				_, err := metadataService.GetRegistryEndpoint()
-				Expect(err).To(HaveOccurred())
+			It("returns registry endpoint pointing to a settings file", func() {
+				registryEndpoint, err := metadataService.GetRegistryEndpoint()
+				Expect(err).NotTo(HaveOccurred())
+				Expect(registryEndpoint).To(Equal("fake-settings-file-path"))
 			})
 		})
 	})

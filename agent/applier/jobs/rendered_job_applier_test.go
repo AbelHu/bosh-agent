@@ -98,9 +98,14 @@ func init() {
 
 			BeforeEach(func() {
 				job, bundle = buildJob(jobsBc)
+
 			})
 
 			ItInstallsJob := func(act func() error) {
+				BeforeEach(func() {
+					fs.TempDirDir = "/fake-tmp-dir"
+				})
+
 				It("returns error when installing job fails", func() {
 					bundle.InstallError = errors.New("fake-install-error")
 
@@ -130,7 +135,6 @@ func init() {
 				})
 
 				It("decompresses job template blob to tmp path and later cleans it up", func() {
-					fs.TempDirDir = "/fake-tmp-dir"
 					blobstore.GetFileName = "/fake-blobstore-file-name"
 
 					var tmpDirExistsBeforeInstall bool
@@ -168,31 +172,15 @@ func init() {
 					Expect(err.Error()).To(ContainSubstring("fake-decompress-error"))
 				})
 
-				It("returns error when getting the list of bin files fails", func() {
-					fs.GlobErr = errors.New("fake-glob-error")
+				It("returns error when walking the tree of files fails", func() {
+					fs.WalkErr = errors.New("fake-walk-error")
 
 					err := act()
 					Expect(err).To(HaveOccurred())
-					Expect(err.Error()).To(ContainSubstring("fake-glob-error"))
-				})
-
-				It("returns error when changing permissions on bin files fails", func() {
-					fs.TempDirDir = "/fake-tmp-dir"
-
-					fs.SetGlob("/fake-tmp-dir/fake-path-in-archive/bin/*", []string{
-						"/fake-tmp-dir/fake-path-in-archive/bin/test",
-					})
-
-					fs.ChmodErr = errors.New("fake-chmod-error")
-
-					err := act()
-					Expect(err).To(HaveOccurred())
-					Expect(err.Error()).To(ContainSubstring("fake-chmod-error"))
+					Expect(err.Error()).To(ContainSubstring("fake-walk-error"))
 				})
 
 				It("installs bundle from decompressed tmp path of a job template", func() {
-					fs.TempDirDir = "/fake-tmp-dir"
-
 					var installedBeforeDecompression bool
 
 					compressor.DecompressFileToDirCallBack = func() {
@@ -209,9 +197,26 @@ func init() {
 					Expect(bundle.InstallSourcePath).To(Equal("/fake-tmp-dir/fake-path-in-archive"))
 				})
 
-				It("sets executable bit for files in bin", func() {
-					fs.TempDirDir = "/fake-tmp-dir"
+				It("sets executable bit for the bin and config directories", func() {
+					var binDirStats, configDirStats *fakesys.FakeFileStats
+					compressor.DecompressFileToDirCallBack = func() {
+						fs.WriteFile("/fake-tmp-dir/fake-path-in-archive/bin/blarg", []byte{})
+						fs.WriteFile("/fake-tmp-dir/fake-path-in-archive/config/blarg.yml", []byte{})
+					}
 
+					bundle.InstallCallBack = func() {
+						binDirStats = fs.GetFileTestStat("/fake-tmp-dir/fake-path-in-archive/bin")
+						configDirStats = fs.GetFileTestStat("/fake-tmp-dir/fake-path-in-archive/config")
+					}
+
+					err := act()
+					Expect(err).ToNot(HaveOccurred())
+
+					Expect(int(binDirStats.FileMode)).To(Equal(0755))
+					Expect(int(configDirStats.FileMode)).To(Equal(0755))
+				})
+
+				It("sets executable bit for files in bin", func() {
 					compressor.DecompressFileToDirCallBack = func() {
 						fs.WriteFile("/fake-tmp-dir/fake-path-in-archive/bin/test1", []byte{})
 						fs.WriteFile("/fake-tmp-dir/fake-path-in-archive/bin/test2", []byte{})
@@ -240,6 +245,32 @@ func init() {
 
 					// non-bin files are not made executable
 					Expect(int(configTestStats.FileMode)).ToNot(Equal(0755))
+				})
+
+				It("sets 644 permissions for files in config", func() {
+					compressor.DecompressFileToDirCallBack = func() {
+						fs.WriteFile("/fake-tmp-dir/fake-path-in-archive/config/config1", []byte{})
+						fs.WriteFile("/fake-tmp-dir/fake-path-in-archive/config/config2", []byte{})
+					}
+
+					fs.SetGlob("/fake-tmp-dir/fake-path-in-archive/config/*", []string{
+						"/fake-tmp-dir/fake-path-in-archive/config/config1",
+						"/fake-tmp-dir/fake-path-in-archive/config/config2",
+					})
+
+					var config1Stats, config2Stats *fakesys.FakeFileStats
+
+					bundle.InstallCallBack = func() {
+						config1Stats = fs.GetFileTestStat("/fake-tmp-dir/fake-path-in-archive/config/config1")
+						config2Stats = fs.GetFileTestStat("/fake-tmp-dir/fake-path-in-archive/config/config2")
+					}
+
+					err := act()
+					Expect(err).ToNot(HaveOccurred())
+
+					// permission for config files should be readable by all
+					Expect(int(config1Stats.FileMode)).To(Equal(0644))
+					Expect(int(config2Stats.FileMode)).To(Equal(0644))
 				})
 			}
 

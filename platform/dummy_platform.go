@@ -33,16 +33,18 @@ func NewDummyPlatform(
 	fs boshsys.FileSystem,
 	cmdRunner boshsys.CmdRunner,
 	dirProvider boshdirs.Provider,
+	devicePathResolver boshdpresolv.DevicePathResolver,
 	logger boshlog.Logger,
-) *dummyPlatform {
+) Platform {
 	return &dummyPlatform{
-		fs:            fs,
-		cmdRunner:     cmdRunner,
-		collector:     collector,
-		compressor:    boshcmd.NewTarballCompressor(cmdRunner, fs),
-		copier:        boshcmd.NewCpCopier(cmdRunner, fs, logger),
-		dirProvider:   dirProvider,
-		vitalsService: boshvitals.NewService(collector, dirProvider),
+		fs:                 fs,
+		cmdRunner:          cmdRunner,
+		collector:          collector,
+		compressor:         boshcmd.NewTarballCompressor(cmdRunner, fs),
+		copier:             boshcmd.NewCpCopier(cmdRunner, fs, logger),
+		dirProvider:        dirProvider,
+		devicePathResolver: devicePathResolver,
+		vitalsService:      boshvitals.NewService(collector, dirProvider),
 	}
 }
 
@@ -74,11 +76,6 @@ func (p dummyPlatform) GetDevicePathResolver() (devicePathResolver boshdpresolv.
 	return p.devicePathResolver
 }
 
-func (p *dummyPlatform) SetDevicePathResolver(devicePathResolver boshdpresolv.DevicePathResolver) (err error) {
-	p.devicePathResolver = devicePathResolver
-	return
-}
-
 func (p dummyPlatform) SetupRuntimeConfiguration() (err error) {
 	return
 }
@@ -107,11 +104,11 @@ func (p dummyPlatform) SetupHostname(hostname string) (err error) {
 	return
 }
 
-func (p dummyPlatform) SetupDhcp(networks boshsettings.Networks) (err error) {
+func (p dummyPlatform) SetupNetworking(networks boshsettings.Networks) (err error) {
 	return
 }
 
-func (p dummyPlatform) SetupManualNetworking(networks boshsettings.Networks) (err error) {
+func (p dummyPlatform) GetConfiguredNetworkInterfaces() (interfaces []string, err error) {
 	return
 }
 
@@ -143,7 +140,7 @@ func (p dummyPlatform) UnmountPersistentDisk(diskSettings boshsettings.DiskSetti
 	return
 }
 
-func (p dummyPlatform) NormalizeDiskPath(diskSettings boshsettings.DiskSettings) string {
+func (p dummyPlatform) GetEphemeralDiskPath(diskSettings boshsettings.DiskSettings) string {
 	return "/dev/sdb"
 }
 
